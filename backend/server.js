@@ -126,6 +126,93 @@ app.post('/api/merge-pdfs', upload.array('pdfFiles', 2), async (req, res) => {
   }
 });
 
+app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
+  let uploadedPath;
+  try {
+    console.log('📥 Split request received...');
+    console.log('File:', req.file);
+    console.log('Body:', req.body);
+
+    if (!req.file) {
+      console.log('❌ No file uploaded');
+      await Operation.create({ operation: 'split', filename: 'none', status: 'failed' });
+      return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+
+    if (!req.body.pageRange) {
+      console.log('❌ Page range missing');
+      await Operation.create({ operation: 'split', filename: req.file.originalname, status: 'failed' });
+      return res.status(400).json({ error: 'Page range is required (e.g., 1-3,2)' });
+    }
+
+    uploadedPath = req.file.path;
+    console.log('📄 Uploaded path:', uploadedPath);
+
+    // Load PDF
+    const pdfBytes = await fs.readFile(uploadedPath);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const totalPages = pdfDoc.getPageCount();
+    console.log('📑 Total pages in uploaded PDF:', totalPages);
+
+    const pageRange = req.body.pageRange.trim();
+    const ranges = pageRange.split(',').map((r) => r.trim());
+    const pagesToInclude = new Set();
+
+    for (const r of ranges) {
+      if (r.includes('-')) {
+        const [start, end] = r.split('-').map(Number);
+        console.log(`➡️ Range: ${start}-${end}`);
+        if (isNaN(start) || isNaN(end) || start < 1 || end > totalPages || start > end) {
+          throw new Error(`Invalid range "${r}". PDF has ${totalPages} pages.`);
+        }
+        for (let i = start; i <= end; i++) pagesToInclude.add(i - 1);
+      } else {
+        const pg = Number(r);
+        console.log(`➡️ Single page: ${pg}`);
+        if (isNaN(pg) || pg < 1 || pg > totalPages) {
+          throw new Error(`Invalid page number "${r}". PDF has ${totalPages} pages.`);
+        }
+        pagesToInclude.add(pg - 1);
+      }
+    }
+
+    console.log('✅ Pages to include:', Array.from(pagesToInclude));
+
+    // Create new PDF
+    const newPdf = await PDFDocument.create();
+    const sorted = Array.from(pagesToInclude).sort((a, b) => a - b);
+    const copied = await newPdf.copyPages(pdfDoc, sorted);
+    copied.forEach((p) => newPdf.addPage(p));
+
+    const splitBytes = await newPdf.save();
+    const outputName = `split_${pageRange.replace(/[^0-9,-]/g, '')}_${req.file.originalname}`;
+    const outputPath = path.join('uploads', outputName);
+    await fs.writeFile(outputPath, splitBytes);
+    console.log('✅ Split file created at:', outputPath);
+
+    await Operation.create({ operation: 'split', filename: req.file.originalname, status: 'success' });
+
+    res.download(outputPath, outputName, async (err) => {
+      if (err) console.error('❌ Error sending split file:', err);
+      await fs.unlink(uploadedPath).catch(() => {});
+      await fs.unlink(outputPath).catch(() => {});
+    });
+  } catch (err) {
+    console.error('❌ Split PDF error:', err);
+    await Operation.create({
+      operation: 'split',
+      filename: req.file?.originalname || 'unknown',
+      status: 'failed',
+    }).catch(() => {});
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    res.status(500).json({ error: 'Failed to split PDF: ' + err.message });
+  }
+});
+
+
+
+
+
 // Start server
 app.listen(port, () => {
   console.log(`Backend running at http://localhost:${port}`);

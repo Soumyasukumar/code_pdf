@@ -1,6 +1,7 @@
 import React from 'react';
 import CompressPDF from './components/CompressPDF';
 import MergePDFs from './components/MergePDFs';
+import SplitPDF from './components/SplitPDF';
 import './App.css';
 
 function App() {
@@ -15,6 +16,10 @@ function App() {
         <div className="section">
           <h2>Merge PDFs</h2>
           <MergePDFs />
+        </div>
+        <div className="section">
+          <h2>Split PDF</h2>
+          <SplitPDF />
         </div>
       </div>
     </div>
