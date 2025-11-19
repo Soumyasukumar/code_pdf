@@ -2,6 +2,8 @@ import React from 'react';
 import CompressPDF from './components/CompressPDF';
 import MergePDFs from './components/MergePDFs';
 import SplitPDF from './components/SplitPDF';
+import PDFtoWord from './components/PDFtoWord';
+import WordToPDF from './components/WordtoPDF';
 import './App.css';
 
 function App() {
@@ -20,6 +22,14 @@ function App() {
         <div className="section">
           <h2>Split PDF</h2>
           <SplitPDF />
+        </div>
+        <div className="section">
+          <h2>PDF to Word</h2>
+          <PDFtoWord />
+        </div>
+        <div className="section">
+          <h2>Word to PDF</h2>
+          <WordToPDF />
         </div>
       </div>
     </div>

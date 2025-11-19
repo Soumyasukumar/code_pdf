@@ -5,12 +5,19 @@ const { PDFDocument } = require('pdf-lib');
 const fs = require('fs').promises;
 const path = require('path');
 const cors = require('cors');
+const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
+const htmlToPdfMake = require('html-to-pdfmake');
+const { JSDOM } = require('jsdom');
+
+// const PdfPrinter = require('pdfmake');        // ← only once, correct name
+const { Document, Packer, Paragraph, TextRun } = require('docx'); // ← for PDF → Word
 require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-// MongoDB Schema for logging operations
+// MongoDB logging schema
 const operationSchema = new mongoose.Schema({
   operation: String,
   filename: String,
@@ -24,22 +31,16 @@ app.use(cors());
 app.use(express.json());
 const upload = multer({ dest: 'uploads/' });
 
-// Ensure uploads directory exists
-const ensureUploadsDir = async () => {
-  try {
-    await fs.mkdir('uploads', { recursive: true });
-  } catch (err) {
-    console.error('Error creating uploads directory:', err);
-  }
-};
-ensureUploadsDir();
+// Create uploads folder
+fs.mkdir('uploads', { recursive: true }).catch(() => {});
 
-// Connect to MongoDB
+// MongoDB connection
 mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-}).then(() => console.log('MongoDB connected'))
-  .catch((err) => console.error('MongoDB connection error:', err));
+})
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error('MongoDB error:', err));
 
 // Endpoint 1: Compress PDF
 app.post('/api/compress-pdf', upload.single('pdfFile'), async (req, res) => {
@@ -208,6 +209,124 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
     res.status(500).json({ error: 'Failed to split PDF: ' + err.message });
   }
 });
+
+// ------------------ PDF → Word (text only) ------------------
+app.post('/api/pdf-to-word', upload.single('pdfFile'), async (req, res) => {
+  let uploadedPath = null;
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
+
+    uploadedPath = req.file.path;
+    const dataBuffer = await fs.readFile(uploadedPath);
+    const pdfData = await pdfParse(dataBuffer);
+
+    const lines = pdfData.text.split('\n').map(l => l.trim()).filter(Boolean);
+
+    const doc = new Document({
+      sections: [{
+        children: lines.map(text => new Paragraph({
+          children: [new TextRun(text)]
+        }))
+      }]
+    });
+
+    const buffer = await Packer.toBuffer(doc);
+    const outputName = req.file.originalname.replace(/\.pdf$/i, '') + '.docx';
+
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'Content-Disposition': `attachment; filename="${outputName}"`
+    });
+    res.send(buffer);
+
+    await Operation.create({ operation: 'pdf-to-word', filename: req.file.originalname, status: 'success' });
+    await fs.unlink(uploadedPath);
+  } catch (err) {
+    console.error('PDF → Word error:', err);
+    await Operation.create({ operation: 'pdf-to-word', filename: req.file?.originalname || 'unknown', status: 'failed' });
+    if (uploadedPath) await fs.unlink(uploadedPath);
+    res.status(500).json({ error: 'Failed to convert PDF to Word' });
+  }
+});
+
+// ------------------ Word → PDF (FULLY WORKING) ------------------
+
+
+const PdfPrinter = require('pdfmake');
+const fonts = {
+  Roboto: {
+    normal: path.join(__dirname, 'fonts', 'Roboto-Regular.ttf'),
+    bold: path.join(__dirname, 'fonts', 'Roboto-Medium.ttf'),
+    italics: path.join(__dirname, 'fonts', 'Roboto-Italic.ttf'),
+    bolditalics: path.join(__dirname, 'fonts', 'Roboto-MediumItalic.ttf'),
+  }
+}
+
+
+const printer = new PdfPrinter(fonts);
+
+app.post('/api/word-to-pdf', upload.single('wordFile'), async (req, res) => {
+  let uploadedPath = null;
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No Word file uploaded' });
+    }
+
+    if (!req.file.originalname.match(/\.docx$/i)) {
+      return res.status(400).json({ error: 'Only .docx files are supported' });
+    }
+
+    uploadedPath = req.file.path;
+
+    const result = await mammoth.convertToHtml({ path: uploadedPath });
+    let html = result.value;
+
+    if (!html || html.trim().length === 0) {
+      throw new Error("Could not extract content from Word file");
+    }
+
+    // REMOVE ALL IMAGES → they break pdfmake
+    html = html.replace(/<img[^>]*>/gi, "");
+
+    // Convert HTML → pdfmake
+    const dom = new JSDOM('');
+    const window = dom.window;
+    const pdfmakeContent = htmlToPdfMake(html, { window: window });
+
+    const docDefinition = {
+      content: pdfmakeContent,
+      defaultStyle: { font: 'Roboto' }
+    };
+
+    const pdfDoc = printer.createPdfKitDocument(docDefinition);
+    const outputName = req.file.originalname.replace(/\.docx$/i, '.pdf');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+
+    pdfDoc.pipe(res);
+    pdfDoc.end();
+
+    await Operation.create({
+      operation: 'word-to-pdf',
+      filename: req.file.originalname,
+      status: 'success'
+    });
+
+    await fs.unlink(uploadedPath);
+  } catch (err) {
+    console.error("Word→PDF error:", err);
+    await Operation.create({
+      operation: 'word-to-pdf',
+      filename: req.file?.originalname || 'unknown',
+      status: 'failed'
+    }).catch(() => {});
+
+    if (uploadedPath) await fs.unlink(uploadedPath);
+    res.status(500).json({ error: 'Conversion failed: ' + err.message });
+  }
+});
+
 
 
 
