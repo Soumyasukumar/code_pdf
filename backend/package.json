@@ -23,6 +23,8 @@
     "multer": "^2.0.2",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
-    "pdfmake": "^0.2.20"
+    "pdf-poppler": "^0.2.3",
+    "pdfmake": "^0.2.20",
+    "pptxgenjs": "^4.0.1"
   }
 }

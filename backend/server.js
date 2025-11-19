@@ -9,6 +9,8 @@ const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
 const htmlToPdfMake = require('html-to-pdfmake');
 const { JSDOM } = require('jsdom');
+const Poppler = require('pdf-poppler');
+const PptxGenJS = require('pptxgenjs');
 
 // const PdfPrinter = require('pdfmake');        // ← only once, correct name
 const { Document, Packer, Paragraph, TextRun } = require('docx'); // ← for PDF → Word
@@ -324,6 +326,57 @@ app.post('/api/word-to-pdf', upload.single('wordFile'), async (req, res) => {
 
     if (uploadedPath) await fs.unlink(uploadedPath);
     res.status(500).json({ error: 'Conversion failed: ' + err.message });
+  }
+});
+
+// ------------------ PDF → PowerPoint ------------------
+const PPTXGenJS = require('pptxgenjs');
+// PDF → PowerPoint endpoint
+app.post('/api/pdf-to-ppt', upload.single('pdfFile'), async (req, res) => {
+  const tempDir = path.join(__dirname, 'temp_images');
+  let uploadedPath = null;
+
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No PDF uploaded' });
+
+    uploadedPath = req.file.path;
+    await fs.mkdir(tempDir, { recursive: true });
+
+    // Convert PDF → PNG images
+    const options = { format: 'png', out_dir: tempDir, out_prefix: 'page', page: null, dpi: 300 };
+    await Poppler.convert(uploadedPath, options);
+
+    let imageFiles = await fs.readdir(tempDir);
+    imageFiles = imageFiles
+      .filter(f => f.endsWith('.png'))
+      .sort((a, b) => parseInt(a.match(/\d+/)[0]) - parseInt(b.match(/\d+/)[0]))
+      .map(f => path.join(tempDir, f));
+
+    if (imageFiles.length === 0) throw new Error('No images generated from PDF');
+
+    // Create PPTX
+    const pptx = new PptxGenJS();
+    imageFiles.forEach(img => {
+      const slide = pptx.addSlide();
+      slide.addImage({ path: img, x: 0, y: 0, w: '100%', h: '100%' });
+    });
+
+    const outputName = req.file.originalname.replace(/\.pdf$/i, '.pptx');
+    const outputPath = path.join('uploads', outputName);
+    await pptx.writeFile({ fileName: outputPath });
+
+    // Send to frontend
+    res.download(outputPath, outputName, async () => {
+      await fs.unlink(uploadedPath).catch(() => {});
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      await fs.unlink(outputPath).catch(() => {});
+    });
+
+  } catch (err) {
+    console.error('PDF → PPT error:', err);
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    res.status(500).json({ error: 'Failed to convert PDF to PowerPoint: ' + err.message });
   }
 });
 

@@ -4,6 +4,7 @@ import MergePDFs from './components/MergePDFs';
 import SplitPDF from './components/SplitPDF';
 import PDFtoWord from './components/PDFtoWord';
 import WordToPDF from './components/WordtoPDF';
+import PDFtoPowerpoint from './components/PDFtoPowerpoint'; // ← new import
 import './App.css';
 
 function App() {
@@ -30,6 +31,10 @@ function App() {
         <div className="section">
           <h2>Word to PDF</h2>
           <WordToPDF />
+        </div>
+        <div className="section">
+          <h2>PDF to PowerPoint</h2>
+          <PDFtoPowerpoint />
         </div>
       </div>
     </div>
