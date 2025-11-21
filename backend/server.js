@@ -79,7 +79,7 @@ app.post('/api/compress-pdf', upload.single('pdfFile'), async (req, res) => {
   }
 });
 
-// Endpoint 2: Merge two PDFs Chandan
+// Endpoint 2: Merge two PDFs 
 app.post('/api/merge-pdfs', upload.array('pdfFiles', 2), async (req, res) => {
   try {
     if (!req.files || req.files.length !== 2) {
