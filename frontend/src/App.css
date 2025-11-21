@@ -1,39 +1,118 @@
+/* App.css - Perfect Grid Layout + Same Beautiful Dark Design */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0f0f1a;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
 .App {
+  /* min-height: 100vh; */
+  background: linear-gradient(135deg, #141427, #1a1a2e);
+  padding: 50px 20px;
+}
+
+.App h1 {
   text-align: center;
-  padding: 20px;
-  font-family: Arial, sans-serif;
+  font-size: 3.2rem;
+  font-weight: 700;
+  background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 60px;
 }
 
+/* THIS IS THE ONLY PART THAT WAS FIXED - Perfect responsive grid */
 .container {
-  display: flex;
-  justify-content: space-around;
-  margin-top: 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 30px;
+  max-width: 1450px;
+  margin: 0 auto;
+  padding: 0 20px;
 }
 
+/* Beautiful card styling (same as before) */
 .section {
-  width: 45%;
-  padding: 20px;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-}
-
-input[type="file"] {
-  margin: 10px 0;
-}
-
-button {
-  padding: 10px 20px;
-  background-color: #007bff;
-  color: white;
-  border: none;
-  border-radius: 4px;
+  background: #1e1e2e;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  transition: all 0.35s ease;
   cursor: pointer;
+  height: fit-content;
 }
 
-button:hover {
-  background-color: #0056b3;
+.section:hover {
+  transform: translateY(-12px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
 }
 
-p {
-  color: red;
+/* Icon at top */
+.section::before {
+  content: '';
+  height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3.5rem;
+  background: linear-gradient(135deg, rgba(255,255,255,0.08), transparent);
+  color: white;
+}
+
+/* Individual icons using your current order */
+.section:nth-child(1)::before { content: "Merge PDF"; color: #e74c3c; }
+.section:nth-child(2)::before { content: "Split PDF"; color: #e74c3c; }
+.section:nth-child(3)::before { content: "Compress PDF"; color: #27ae60; }
+.section:nth-child(4)::before { content: "PDF to Word"; color: #2b579a; }
+.section:nth-child(5)::before { content: "Word to PDF"; color: #2b579a; }
+.section:nth-child(6)::before { content: "PDF to PPT"; color: #d24726; }
+.section:nth-child(7)::before { content: "JPG to PDF"; color: #f39c12; }
+
+.section h2 {
+  padding: 20px 24px 10px;
+  font-size: 1.4rem;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section > div {
+  padding: 0 24px 24px;
+  font-size: 0.95rem;
+  color: #bbbbbb;
+  line-height: 1.6;
+}
+
+/* Optional: Add "New!" badge later by wrapping in <h2>Edit PDF <span className="badge">New!</span></h2> */
+.badge {
+  background: #e74c3c;
+  color: white;
+  font-size: 0.7rem;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: bold;
+}
+
+/* Responsive perfection */
+@media (max-width: 1024px) {
+  .container {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .container {
+    grid-template-columns: 1fr;
+  }
+  .App h1 {
+    font-size: 2.5rem;
+  }
 }

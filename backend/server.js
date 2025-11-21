@@ -2,7 +2,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const multer = require('multer');
 const { PDFDocument } = require('pdf-lib');
-const fs = require('fs').promises;
+const fs = require('fs').promises; // Promise-based operations (readFile, writeFile)
+const fsBase = require('fs'); // <--- ADD THIS LINE: Imports the standard fs module for streams
 const path = require('path');
 const cors = require('cors');
 const pdfParse = require('pdf-parse');
@@ -11,6 +12,7 @@ const htmlToPdfMake = require('html-to-pdfmake');
 const { JSDOM } = require('jsdom');
 const Poppler = require('pdf-poppler');
 const PptxGenJS = require('pptxgenjs');
+const archiver = require('archiver');
 
 // const PdfPrinter = require('pdfmake');        // ← only once, correct name
 const { Document, Packer, Paragraph, TextRun } = require('docx'); // ← for PDF → Word
@@ -380,8 +382,158 @@ app.post('/api/pdf-to-ppt', upload.single('pdfFile'), async (req, res) => {
   }
 });
 
+// ------------------ JPG → PDF ------------------
+app.post('/api/jpg-to-pdf', upload.array('images'), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      await Operation.create({ operation: 'jpg-to-pdf', filename: 'none', status: 'failed' });
+      return res.status(400).json({ error: 'No images uploaded' });
+    }
 
+    // Create a new PDF Document
+    const pdfDoc = await PDFDocument.create();
 
+    for (const file of req.files) {
+      const filePath = file.path;
+      const imageBytes = await fs.readFile(filePath);
+      
+      let image;
+      // We try to embed as JPG. If the user uploads a PNG by mistake, 
+      // we try to handle it, otherwise catch the error.
+      try {
+          if (file.mimetype === 'image/png') {
+             image = await pdfDoc.embedPng(imageBytes);
+          } else {
+             image = await pdfDoc.embedJpg(imageBytes);
+          }
+      } catch (e) {
+          console.warn(`Skipping file ${file.originalname} - format not supported.`);
+          continue; 
+      }
+
+      // Get image dimensions
+      const { width, height } = image.scale(1);
+
+      // Add a page with the same dimensions as the image
+      const page = pdfDoc.addPage([width, height]);
+
+      // Draw the image on the page
+      page.drawImage(image, {
+        x: 0,
+        y: 0,
+        width: width,
+        height: height,
+      });
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const outputName = `converted_images_${Date.now()}.pdf`;
+    const outputPath = path.join('uploads', outputName);
+
+    await fs.writeFile(outputPath, pdfBytes);
+
+    // Log operation
+    await Operation.create({ 
+      operation: 'jpg-to-pdf', 
+      filename: `${req.files.length} files`, 
+      status: 'success' 
+    });
+
+    res.download(outputPath, outputName, async (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+        res.status(500).json({ error: 'Error sending converted PDF' });
+      }
+      // Cleanup all uploaded images and the output PDF
+      for (const file of req.files) {
+        await fs.unlink(file.path).catch(console.error);
+      }
+      await fs.unlink(outputPath).catch(console.error);
+    });
+
+  } catch (err) {
+    console.error('JPG → PDF error:', err);
+    await Operation.create({ 
+      operation: 'jpg-to-pdf', 
+      filename: 'batch', 
+      status: 'failed' 
+    });
+    
+    // Cleanup uploaded files on error
+    if (req.files) {
+        req.files.forEach(f => fs.unlink(f.path).catch(() => {}));
+    }
+    
+    res.status(500).json({ error: 'Failed to convert images to PDF: ' + err.message });
+  }
+});
+
+// ------------------ PDF → JPG ------------------
+app.post('/api/pdf-to-jpg', upload.single('pdfFile'), async (req, res) => {
+  const tempDir = path.join('uploads', 'temp_images', `jpg_${Date.now()}`);
+  let uploadedPath = null;
+
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No PDF uploaded' });
+
+    uploadedPath = req.file.path;
+
+    await fs.mkdir(tempDir, { recursive: true });
+
+    const options = {
+      format: 'png',
+      out_dir: tempDir,
+      out_prefix: 'page',     // ALWAYS USE SIMPLE PREFIX
+      page: null,
+      dpi: 150
+    };
+
+    await Poppler.convert(uploadedPath, options);
+
+    let imageFiles = await fs.readdir(tempDir);
+
+    imageFiles = imageFiles
+      .filter(f => f.endsWith('.png'))
+      .sort((a, b) => {
+        const nA = parseInt(a.match(/\d+/)[0]);
+        const nB = parseInt(b.match(/\d+/)[0]);
+        return nA - nB;
+      })
+      .map(f => path.join(tempDir, f));
+
+    if (imageFiles.length === 0)
+      return res.status(500).json({ error: 'Poppler failed to generate images. Install poppler correctly.' });
+
+    const zipName = req.file.originalname.replace(/\.pdf$/i, '') + '_jpg_images.zip';
+    const zipPath = path.join('uploads', zipName);
+    const output = fsBase.createWriteStream(zipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    archive.pipe(output);
+
+    for (const img of imageFiles) {
+      archive.file(img, { name: path.basename(img).replace('.png', '.jpg') });
+    }
+
+    await new Promise((resolve, reject) => {
+      archive.on('finish', resolve);
+      archive.on('error', reject);
+      archive.finalize();
+    });
+
+    res.download(zipPath, zipName, async () => {
+      await fs.unlink(uploadedPath).catch(() => {});
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      await fs.unlink(zipPath).catch(() => {});
+    });
+
+  } catch (err) {
+    console.error('PDF → JPG error:', err);
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    res.status(500).json({ error: 'Failed: ' + err.message });
+  }
+});
 
 
 

@@ -5,6 +5,8 @@ import SplitPDF from './components/SplitPDF';
 import PDFtoWord from './components/PDFtoWord';
 import WordToPDF from './components/WordtoPDF';
 import PDFtoPowerpoint from './components/PDFtoPowerpoint'; // ← new import
+import JPGtoPDF from './components/JPGtoPDF';
+import PDFtoJPG from './components/PdftoJPG';
 import './App.css';
 
 function App() {
@@ -35,6 +37,14 @@ function App() {
         <div className="section">
           <h2>PDF to PowerPoint</h2>
           <PDFtoPowerpoint />
+        </div>
+        <div className="section">
+          <h2>JPG to PDF</h2>
+          <JPGtoPDF />
+        </div>
+        <div className="section">
+          <h2>PDF to JPG</h2>
+          <PDFtoJPG />
         </div>
       </div>
     </div>
