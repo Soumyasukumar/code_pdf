@@ -7,6 +7,7 @@ import WordToPDF from './components/WordtoPDF';
 import PDFtoPowerpoint from './components/PDFtoPowerpoint'; // ← new import
 import JPGtoPDF from './components/JPGtoPDF';
 import PDFtoJPG from './components/PdftoJPG';
+import PDFtoExcel from './components/PDFtoExcel';
 import './App.css';
 
 function App() {
@@ -46,6 +47,10 @@ function App() {
           <h2>PDF to JPG</h2>
           <PDFtoJPG />
         </div>
+        <div className="section">
++          <h2>PDF to Excel</h2>
++          <PDFtoExcel />
++        </div>
       </div>
     </div>
   );

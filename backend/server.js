@@ -13,6 +13,8 @@ const { JSDOM } = require('jsdom');
 const Poppler = require('pdf-poppler');
 const PptxGenJS = require('pptxgenjs');
 const archiver = require('archiver');
+const ExcelJS = require('exceljs');
+
 
 // const PdfPrinter = require('pdfmake');        // ← only once, correct name
 const { Document, Packer, Paragraph, TextRun } = require('docx'); // ← for PDF → Word
@@ -534,6 +536,117 @@ app.post('/api/pdf-to-jpg', upload.single('pdfFile'), async (req, res) => {
     res.status(500).json({ error: 'Failed: ' + err.message });
   }
 });
+
+// ------------------ PDF → Excel (simple table extraction) ------------------
+// ------------------ PDF → Excel (simple table extraction) ------------------
+// Note: We use fsBase for the createReadStream needed for streaming the response.
+app.post('/api/pdf-to-excel', upload.single('pdfFile'), async (req, res) => {
+    let uploadedPath = null;
+    let outputPath = null;
+
+    try {
+        if (!req.file) {
+            await Operation.create({ operation: 'pdf-to-excel', filename: 'none', status: 'failed' });
+            return res.status(400).json({ error: 'No PDF file uploaded' });
+        }
+
+        uploadedPath = req.file.path;
+
+        // --- Conversion Logic (Same as before) ---
+        const dataBuffer = await fs.readFile(uploadedPath);
+        const pdfData = await pdfParse(dataBuffer);
+        const rawText = pdfData.text || "";
+        if (!rawText.trim()) throw new Error("PDF contains no readable text.");
+
+        const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        const splitLine = (line) => {
+            if (line.includes('\t')) return line.split('\t').map(c => c.trim());
+            if (line.includes('|')) return line.split('|').map(c => c.trim());
+            if (/\s{2,}/.test(line)) return line.split(/\s{2,}/).map(c => c.trim()).filter(Boolean);
+            return [line];
+        };
+
+        let rows = lines.map(splitLine).filter(r => r.length > 0);
+        const maxCols = rows.reduce((max, r) => Math.max(max, r.length), 0);
+        rows = rows.map(r => {
+            while (r.length < maxCols) r.push(""); 
+            return r;
+        });
+        
+        if (maxCols === 0 && rows.length > 0) {
+            // Log this as a soft failure if the text extraction was poor
+            console.warn("Conversion warning: PDF text extracted but columns could not be reliably split.");
+        }
+        // --- End Conversion Logic ---
+
+        // 4. Create Excel file
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Sheet1');
+        rows.forEach(r => worksheet.addRow(r));
+
+        const outputName = req.file.originalname.replace(/\.pdf$/i, '') + ".xlsx";
+        outputPath = path.join("uploads", outputName);
+
+        await workbook.xlsx.writeFile(outputPath);
+
+        await Operation.create({
+            operation: "pdf-to-excel",
+            filename: req.file.originalname,
+            status: "success"
+        });
+
+        // 5. MANUAL STREAMING FOR RELIABILITY (Replaces res.download)
+        const fileStream = fsBase.createReadStream(outputPath);
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+        
+        // Pipe the file stream to the response stream
+        fileStream.pipe(res);
+
+        // Crucial: Handle stream errors and cleanup when the response finishes
+        fileStream.on('error', (streamErr) => {
+            console.error('File stream error:', streamErr);
+            // Don't send status if headers are already sent, but ensure client gets some closure
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Server failed to stream the output file.' });
+            }
+        });
+        
+        res.on('finish', async () => {
+            console.log('Download complete. Cleaning up files.');
+            // Cleanup files after the client has received the response
+            try {
+                if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+                if (outputPath) await fs.unlink(outputPath).catch(() => {});
+            } catch (cleanupErr) {
+                console.error('Final cleanup failed:', cleanupErr);
+            }
+        });
+
+
+    } catch (err) {
+        console.error("PDF → Excel error:", err);
+        
+        await Operation.create({ 
+            operation: 'pdf-to-excel', 
+            filename: req.file?.originalname || 'unknown', 
+            status: 'failed' 
+        });
+        
+        // Cleanup uploaded file on main error path
+        if (uploadedPath) {
+            await fs.unlink(uploadedPath).catch(cleanErr => console.error("Cleanup error:", cleanErr));
+        }
+        
+        // Send JSON error response (This is what the client fix expects)
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Failed to convert PDF to Excel: " + err.message });
+        }
+    }
+});
+
+
 
 
 
