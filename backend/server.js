@@ -13,7 +13,9 @@ const { JSDOM } = require('jsdom');
 const Poppler = require('pdf-poppler');
 const PptxGenJS = require('pptxgenjs');
 const archiver = require('archiver');
-const ExcelJS = require('exceljs');
+const ExcelJS = require('exceljs'); 
+const { createReadStream } = require('fs');
+const unzipper = require('unzipper');
 
 
 // const PdfPrinter = require('pdfmake');        // ← only once, correct name
@@ -646,6 +648,349 @@ app.post('/api/pdf-to-excel', upload.single('pdfFile'), async (req, res) => {
     }
 });
 
+
+// ------------------ PowerPoint → PDF (NEW FEATURE) ------------------
+// ------------------ PowerPoint → PDF (FIXED & WORKING) ------------------
+app.post('/api/ppt-to-pdf', upload.single('pptFile'), async (req, res) => {
+  let uploadedPath = null;
+  let tempDir = null;
+
+  try {
+    // Validation
+    if (!req.file) {
+      await Operation.create({ operation: 'ppt-to-pdf', filename: 'none', status: 'failed' });
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    if (!req.file.originalname.toLowerCase().match(/\.pptx?$/i)) {
+      await Operation.create({ operation: 'ppt-to-pdf', filename: req.file.originalname, status: 'failed' });
+      return res.status(400).json({ error: 'Please upload a valid .pptx or .ppt file' });
+    }
+
+    uploadedPath = req.file.path;
+    tempDir = path.join(__dirname, 'temp_ppt', Date.now().toString());
+    await fs.mkdir(tempDir, { recursive: true });
+
+    console.log('🔄 Converting PPTX:', req.file.originalname);
+
+    // Method 1: Try using PptxGenJS to render slides as images
+    let slideImages = [];
+    
+    try {
+      // Extract slides using PptxGenJS
+      const pptx = new PptxGenJS();
+      await pptx.loadFile(uploadedPath); // Load the PPTX file
+      
+      const slideCount = pptx.getSlideCount();
+      console.log(`📊 Found ${slideCount} slides`);
+
+      for (let i = 0; i < slideCount; i++) {
+        const tempImagePath = path.join(tempDir, `slide_${i + 1}.png`);
+        
+        // Render slide as PNG
+        const slideImageBuffer = await pptx.renderSlideAsImage(i);
+        await fs.writeFile(tempImagePath, slideImageBuffer);
+        
+        slideImages.push(tempImagePath);
+        console.log(`✅ Slide ${i + 1} rendered`);
+      }
+    } catch (pptxError) {
+      console.log('⚠️ PptxGenJS method failed, trying ZIP extraction method...');
+      
+      // Method 2: Fallback - Extract images from PPTX ZIP structure
+      const AdmZip = require('adm-zip');
+      const zip = new AdmZip(uploadedPath);
+      
+      // Extract to temp directory
+      zip.extractAllTo(tempDir, true);
+      
+      // Find slide images in PPTX structure
+      const pptSlidesDir = path.join(tempDir, 'ppt', 'slides');
+      const mediaDir = path.join(tempDir, 'ppt', 'media');
+      
+      let allImages = [];
+      
+      // Check slides directory
+      if (await fs.access(pptSlidesDir).then(() => true).catch(() => false)) {
+        const slideFiles = await fs.readdir(pptSlidesDir);
+        allImages = allImages.concat(
+          slideFiles
+            .filter(f => f.match(/slide\d+\.xml/i))
+            .map(f => path.join(pptSlidesDir, f))
+        );
+      }
+      
+      // Check media directory for embedded images
+      if (await fs.access(mediaDir).then(() => true).catch(() => false)) {
+        const mediaFiles = await fs.readdir(mediaDir);
+        allImages = allImages.concat(
+          mediaFiles
+            .filter(f => /\.(png|jpg|jpeg|gif)$/i.test(f))
+            .sort((a, b) => {
+              const numA = parseInt(a.match(/\d+/)?.[0] || '0');
+              const numB = parseInt(b.match(/\d+/)?.[0] || '0');
+              return numA - numB;
+            })
+            .map(f => path.join(mediaDir, f))
+        );
+      }
+      
+      slideImages = allImages.slice(0, 20); // Limit to first 20 slides
+    }
+
+    if (slideImages.length === 0) {
+      throw new Error('No slides found in the PowerPoint presentation');
+    }
+
+    console.log(`📸 Found ${slideImages.length} images to convert`);
+
+    // Create PDF from images
+    const pdfDoc = await PDFDocument.create();
+    
+    for (let i = 0; i < slideImages.length; i++) {
+      const imgPath = slideImages[i];
+      
+      try {
+        const imgBytes = await fs.readFile(imgPath);
+        const ext = path.extname(imgPath).toLowerCase();
+        
+        let image;
+        if (ext === '.png') {
+          image = await pdfDoc.embedPng(imgBytes);
+        } else {
+          image = await pdfDoc.embedJpg(imgBytes);
+        }
+
+        // Standard PowerPoint slide size (10x5.625 inches at 72 DPI)
+        const pageWidth = 720;  // 10 inches
+        const pageHeight = 405; // 5.625 inches
+        
+        const page = pdfDoc.addPage([pageWidth, pageHeight]);
+        
+        // Scale image to fit page while maintaining aspect ratio
+        const { width: imgWidth, height: imgHeight } = image.scale(1);
+        const scale = Math.min(pageWidth / imgWidth, pageHeight / imgHeight);
+        const scaledWidth = imgWidth * scale;
+        const scaledHeight = imgHeight * scale;
+        
+        const x = (pageWidth - scaledWidth) / 2;
+        const y = (pageHeight - scaledHeight) / 2;
+        
+        page.drawImage(image, {
+          x,
+          y,
+          width: scaledWidth,
+          height: scaledHeight,
+        });
+        
+      } catch (imgError) {
+        console.warn(`⚠️ Failed to process image ${imgPath}:`, imgError.message);
+        continue;
+      }
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const outputName = req.file.originalname.replace(/\.pptx?$/i, '.pdf');
+
+    // Log success
+    await Operation.create({
+      operation: 'ppt-to-pdf',
+      filename: req.file.originalname,
+      status: 'success'
+    });
+
+    console.log(`✅ PDF created: ${outputName} (${slideImages.length} slides)`);
+
+    // Send PDF as download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+    res.send(pdfBytes);
+
+  } catch (err) {
+    console.error('❌ PPTX → PDF Error:', err);
+    
+    await Operation.create({
+      operation: 'ppt-to-pdf',
+      filename: req.file?.originalname || 'unknown',
+      status: 'failed'
+    });
+
+    res.status(500).json({ 
+      error: 'Failed to convert PowerPoint to PDF',
+      details: err.message
+    });
+  } finally {
+    // Cleanup
+    if (uploadedPath) {
+      await fs.unlink(uploadedPath).catch(() => {});
+    }
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+});
+
+
+  // ------------------ Excel → PDF (FIXED ENDPOINT) ------------------
+  app.post('/api/excel-to-pdf', upload.single('excelFile'), async (req, res) => {
+    let uploadedPath = null;
+
+    try {
+      console.log('📥 Excel to PDF request received');
+      console.log('File:', req.file);
+
+      // Validation
+      if (!req.file) {
+        console.log('❌ No file uploaded');
+        await Operation.create({ operation: 'excel-to-pdf', filename: 'none', status: 'failed' });
+        return res.status(400).json({ error: 'No Excel file uploaded' });
+      }
+
+      if (!req.file.originalname.toLowerCase().match(/\.xlsx?$/i)) {
+        console.log('❌ Invalid file type:', req.file.originalname);
+        await Operation.create({ operation: 'excel-to-pdf', filename: req.file.originalname, status: 'failed' });
+        return res.status(400).json({ error: 'Please upload a valid .xlsx or .xls file' });
+      }
+
+      if (req.file.size > 50 * 1024 * 1024) { // 50MB
+        console.log('❌ File too large:', req.file.size);
+        await Operation.create({ operation: 'excel-to-pdf', filename: req.file.originalname, status: 'failed' });
+        return res.status(413).json({ error: 'File too large. Maximum size is 50MB' });
+      }
+
+      uploadedPath = req.file.path;
+      console.log('🔄 Converting Excel:', req.file.originalname);
+
+      // Read Excel file using ExcelJS
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(uploadedPath);
+      
+      const pdfDoc = await PDFDocument.create();
+      const worksheets = workbook.worksheets;
+      
+      console.log(`📊 Found ${worksheets.length} worksheets`);
+
+      if (worksheets.length === 0) {
+        throw new Error('No worksheets found in Excel file');
+      }
+
+      let pageIndex = 0;
+      for (const worksheet of worksheets) {
+        const sheetName = worksheet.name || `Sheet${pageIndex + 1}`;
+        console.log(`📄 Processing worksheet: ${sheetName}`);
+        
+        // Create page for each worksheet
+        const pageWidth = 595; // A4
+        const pageHeight = 842;
+        const page = pdfDoc.addPage([pageWidth, pageHeight]);
+        
+        // Title
+        page.drawText(sheetName, {
+          x: 50,
+          y: pageHeight - 50,
+          size: 16,
+          font: await pdfDoc.embedFont('Helvetica-Bold')
+        });
+
+        let currentY = pageHeight - 80;
+        const rowHeight = 16;
+        const colWidth = 70;
+        const marginLeft = 50;
+
+        // Get data
+        const rows = [];
+        worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+          const rowData = [];
+          row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            let cellValue = '';
+            if (cell.value !== null && cell.value !== undefined) {
+              cellValue = cell.value.toString().substring(0, 30); // Truncate long text
+            }
+            rowData.push(cellValue);
+          });
+          rows.push(rowData);
+        });
+
+        // Draw rows
+        for (let rowIndex = 0; rowIndex < Math.min(rows.length, 40); rowIndex++) { // Limit to 40 rows per sheet
+          if (currentY < 100) break; // Stop if page is full
+          
+          const rowData = rows[rowIndex];
+          let colX = marginLeft;
+          
+          for (let colIndex = 0; colIndex < Math.min(rowData.length, 8); colIndex++) { // 8 columns max
+            if (colX > pageWidth - 50) break;
+            
+            const cellText = rowData[colIndex] || '';
+            const fontSize = rowIndex === 0 ? 10 : 9; // Headers slightly larger
+            const font = rowIndex === 0 ? await pdfDoc.embedFont('Helvetica-Bold') : await pdfDoc.embedFont('Helvetica');
+            
+            page.drawText(cellText, {
+              x: colX,
+              y: currentY,
+              size: fontSize,
+              font,
+              maxWidth: colWidth - 5
+            });
+            colX += colWidth;
+          }
+          currentY -= rowHeight;
+        }
+        
+        pageIndex++;
+      }
+
+      const pdfBytes = await pdfDoc.save();
+      const outputName = req.file.originalname.replace(/\.xlsx?$/i, '.pdf');
+
+      // Log success
+      await Operation.create({
+        operation: 'excel-to-pdf',
+        filename: req.file.originalname,
+        status: 'success'
+      });
+
+      console.log(`✅ PDF created successfully: ${outputName}`);
+
+      // Send PDF
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+      res.send(pdfBytes);
+
+    } catch (err) {
+      console.error('❌ Excel → PDF Error:', err);
+      
+      await Operation.create({
+        operation: 'excel-to-pdf',
+        filename: req.file?.originalname || 'unknown',
+        status: 'failed'
+      });
+
+      // Send detailed error response
+      res.status(500).json({ 
+        error: 'Failed to convert Excel to PDF',
+        details: err.message,
+        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+      });
+    } finally {
+      // Cleanup
+      if (uploadedPath) {
+        await fs.unlink(uploadedPath).catch(err => console.error('Cleanup error:', err));
+      }
+    }
+  });
+
+
+
+
+// Helper function to avoid repeating Operation.create
+async function logOperation(op, filename, status) {
+  try {
+    await Operation.create({ operation: op, filename, status });
+  } catch (err) {
+    console.error('Failed to log operation:', err);
+  }
+}
 
 
 

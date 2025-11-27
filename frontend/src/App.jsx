@@ -8,7 +8,10 @@ import PDFtoPowerpoint from './components/PDFtoPowerpoint'; // ← new import
 import JPGtoPDF from './components/JPGtoPDF';
 import PDFtoJPG from './components/PdftoJPG';
 import PDFtoExcel from './components/PDFtoExcel';
+import POWERPOINTtoPDF from './components/POWERPOINTtoPDF'; // ← new import
+import ExcelToPDF from './components/ExcelToPDF'; // ← new import
 import './App.css';
+
 
 function App() {
   return (
@@ -48,9 +51,18 @@ function App() {
           <PDFtoJPG />
         </div>
         <div className="section">
-+          <h2>PDF to Excel</h2>
-+          <PDFtoExcel />
-+        </div>
+          <h2>PDF to Excel</h2>
+          <PDFtoExcel />
+        </div>
+
+        <div className="section">
+          <h2>Powerpoint to PDF</h2>
+          <POWERPOINTtoPDF />
+        </div>
+         <div className="section">
+          <h2>Excel to PDF</h2>
+          <ExcelToPDF/>
+        </div>
       </div>
     </div>
   );
