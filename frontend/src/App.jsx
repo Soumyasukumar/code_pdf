@@ -10,6 +10,8 @@ import PDFtoJPG from './components/PdftoJPG';
 import PDFtoExcel from './components/PDFtoExcel';
 import POWERPOINTtoPDF from './components/POWERPOINTtoPDF'; // ← new import
 import ExcelToPDF from './components/ExcelToPDF'; // ← new import
+import EditPDF from './components/EditPDF';
+import AddWatermark from './components/AddWatermark'; // ← ADD THIS
 import './App.css';
 
 
@@ -59,9 +61,17 @@ function App() {
           <h2>Powerpoint to PDF</h2>
           <POWERPOINTtoPDF />
         </div>
-         <div className="section">
+        <div className="section">
           <h2>Excel to PDF</h2>
-          <ExcelToPDF/>
+          <ExcelToPDF />
+        </div>
+        <div className="App">
+          <h2>Edit PDF</h2>
+          <EditPDF />
+        </div>
+        <div className="section">
+          <h2>Add Watermark</h2>
+          <AddWatermark />
         </div>
       </div>
     </div>
