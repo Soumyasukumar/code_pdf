@@ -12,6 +12,7 @@ import POWERPOINTtoPDF from './components/POWERPOINTtoPDF'; // ← new import
 import ExcelToPDF from './components/ExcelToPDF'; // ← new import
 import EditPDF from './components/EditPDF';
 import AddWatermark from './components/AddWatermark'; // ← ADD THIS
+import RotatePdf from './components/RotatePdf';
 import './App.css';
 
 
@@ -72,6 +73,10 @@ function App() {
         <div className="section">
           <h2>Add Watermark</h2>
           <AddWatermark />
+        </div>
+        <div className="section">
+          <h2>Rotate PDF</h2>
+          <RotatePdf />
         </div>
       </div>
     </div>

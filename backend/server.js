@@ -1648,6 +1648,98 @@ app.post('/api/add-watermark', upload.single('pdfFile'), async (req, res) => {
 });
 
 
+// ------------------ ROTATE PDF ENDPOINT (ROBUST) ------------------
+app.post('/api/rotate-pdf', upload.single('pdfFile'), async (req, res) => {
+  let uploadedPath = null;
+
+  try {
+    console.log('🔄 Rotate PDF request received...');
+    console.log('📂 Body:', req.body); // Check if angle is arriving
+
+    // 1. Validation
+    if (!req.file) {
+      console.error('❌ No file received');
+      return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+
+    // Parse angle safely
+    const angle = parseInt(req.body.angle);
+    console.log(`📐 Requested Rotation: ${angle} degrees`);
+
+    if (isNaN(angle) || angle % 90 !== 0) {
+      console.error('❌ Invalid angle:', req.body.angle);
+      return res.status(400).json({ error: 'Rotation angle must be a multiple of 90' });
+    }
+
+    uploadedPath = req.file.path;
+
+    // 2. Load PDF
+    const pdfBytes = await fs.readFile(uploadedPath);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const pages = pdfDoc.getPages();
+    
+    console.log(`📄 PDF Loaded. Total pages: ${pages.length}`);
+
+    // 3. Apply Rotation (Safe Method)
+    pages.forEach((page, index) => {
+      // Get current rotation safely (handles different pdf-lib versions)
+      const rawRotation = page.getRotation();
+      let currentRotation = 0;
+
+      if (typeof rawRotation === 'object' && rawRotation.angle !== undefined) {
+        currentRotation = rawRotation.angle;
+      } else if (typeof rawRotation === 'number') {
+        currentRotation = rawRotation;
+      }
+
+      const newRotation = currentRotation + angle;
+      
+      // Use the 'degrees' helper imported at the top of server.js
+      page.setRotation(degrees(newRotation));
+    });
+
+    // 4. Save and Send
+    const rotatedPdfBytes = await pdfDoc.save();
+    const outputName = `rotated_${angle}_${req.file.originalname}`;
+    
+    console.log('✅ PDF Rotated successfully. Sending back...');
+
+    // Log operation
+    await Operation.create({
+      operation: 'rotate-pdf',
+      filename: req.file.originalname,
+      status: 'success'
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+    res.send(Buffer.from(rotatedPdfBytes));
+
+    // Cleanup
+    await fs.unlink(uploadedPath).catch(() => {});
+
+  } catch (err) {
+    console.error('❌ CRITICAL ROTATE ERROR:', err);
+    
+    // Attempt to log failure to DB
+    try {
+        await Operation.create({
+        operation: 'rotate-pdf',
+        filename: req.file?.originalname || 'unknown',
+        status: 'failed'
+        });
+    } catch(dbErr) { console.error("DB Log failed", dbErr); }
+
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    
+    // Send detailed error to frontend so you can see it in the Alert
+    res.status(500).json({ error: 'Server Error: ' + err.message });
+  }
+});
+
+
+
+
 // Global error handler for uncaught exceptions
 app.use((err, req, res, next) => {
   console.error('Global error:', err);
