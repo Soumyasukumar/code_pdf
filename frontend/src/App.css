@@ -5,13 +5,15 @@
 }
 
 .container {
-  display: flex;
+  display: grid;
   justify-content: space-around;
   margin-top: 20px;
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .section {
   width: 45%;
+  height: 70%;
   padding: 20px;
   border: 1px solid #ccc;
   border-radius: 8px;
