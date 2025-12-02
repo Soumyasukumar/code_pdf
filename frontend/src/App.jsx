@@ -13,6 +13,7 @@ import ExcelToPDF from './components/ExcelToPDF'; // ← new import
 import EditPDF from './components/EditPDF';
 import AddWatermark from './components/AddWatermark'; // ← ADD THIS
 import RotatePdf from './components/RotatePdf';
+import './components/AddWatermark.css'; // ← ADD THIS
 import './App.css';
 
 
