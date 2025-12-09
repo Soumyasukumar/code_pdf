@@ -16,9 +16,13 @@ const archiver = require('archiver');
 const ExcelJS = require('exceljs'); 
 const { createReadStream } = require('fs');
 const unzipper = require('unzipper');
+
 // ✅ Use 'degrees' for text rotation
 const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
+const { exec } = require("child_process");
+// const path = require("path");
 const Color = require('color'); // To parse hex color strings
+// const { PDFDocument, degrees } = require('pdf-lib'); // ← already correct
 
 
 
@@ -1738,6 +1742,129 @@ app.post('/api/rotate-pdf', upload.single('pdfFile'), async (req, res) => {
 });
 
 
+  app.post('/api/unlock-pdf', upload.single('pdfFile'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded' });
+  }
+
+  if (!req.body.password) {
+    return res.status(400).json({ error: 'Password is required' });
+  }
+
+  const input = req.file.path;
+  const output = input + "_unlocked.pdf";
+  const password = req.body.password.trim();
+
+  const qpdfPath = `"C:\\Program Files\\qpdf 12.2.0\\bin\\qpdf.exe"`;
+const cmd = `${qpdfPath} --password=${password} --decrypt "${input}" "${output}"`;
+
+
+  exec(cmd, async (err) => {
+    if (err) {
+      console.log("QPDF error:", err.message);
+
+      if (err.message.includes("invalid password")) {
+        return res.status(401).json({ error: "Incorrect password" });
+      }
+
+      return res.status(500).json({ error: "Failed to unlock PDF" });
+    }
+
+    // Success
+    const data = await fs.readFile(output);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="unlocked_${req.file.originalname}"`);
+    res.send(data);
+
+    // Cleanup
+    await fs.unlink(input).catch(() => {});
+    await fs.unlink(output).catch(() => {});
+  });
+});
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// FINAL WORKING PROTECT PDF – DIRECT exec (No PATH issues, uses your qpdf.exe)
+app.post('/api/protect-pdf', upload.single('pdfFile'), async (req, res) => {
+  let inputPath = null;
+  let outputPath = null;
+
+  try {
+    console.log("Protect PDF: Starting request...");
+
+    if (!req.file) {
+      console.log("Protect PDF: No file uploaded");
+      return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+
+    if (!req.body.password || req.body.password.trim() === '') {
+      console.log("Protect PDF: No password");
+      return res.status(400).json({ error: 'Password is required' });
+    }
+
+    inputPath = req.file.path;
+    outputPath = inputPath.replace(/\.pdf$/, '_protected.pdf');
+    const password = req.body.password.trim();
+
+    console.log(`Protect PDF: Input: ${inputPath}`);
+    console.log(`Protect PDF: Output: ${outputPath}`);
+    console.log(`Protect PDF: Password length: ${password.length}`);
+
+    // Use your existing qpdf.exe directly – NO PATH NEEDED
+    const qpdfExe = 'C:\\Program Files\\qpdf 12.2.0\\bin\\qpdf.exe';
+    
+    // Exact working command for encrypt (tested on Windows)
+    const cmd = `"${qpdfExe}" --encrypt "${password}" "${password}" 256 --print=full --modify=none --extract=n --annotate=n --form=n --assemble=n "${inputPath}" "${outputPath}"`;
+
+    console.log("Protect PDF: Running command:", cmd);
+
+    // Use promisified exec for clean async
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execAsync = util.promisify(exec);
+
+    await execAsync(cmd);
+
+    console.log("Protect PDF: qpdf encrypt successful!");
+
+    // Send protected file
+    const protectedData = await fs.readFile(outputPath);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="protected_${req.file.originalname}"`);
+    res.send(protectedData);
+
+    // Log success
+    await Operation.create({
+      operation: 'protect-pdf',
+      filename: req.file.originalname,
+      status: 'success'
+    });
+
+    // Cleanup
+    await fs.unlink(inputPath).catch(() => {});
+    await fs.unlink(outputPath).catch(() => {});
+
+    console.log("Protect PDF: Complete!");
+
+  } catch (err) {
+    console.error('Protect PDF FAILED:', err.message);
+    console.error('Full error:', err); // Debug full error
+    
+    await Operation.create({
+      operation: 'protect-pdf',
+      filename: req.file?.originalname || 'unknown',
+      status: 'failed'
+    }).catch(() => {});
+
+    if (inputPath) await fs.unlink(inputPath).catch(() => {});
+    if (outputPath) await fs.unlink(outputPath).catch(() => {});
+
+    res.status(500).json({ error: `Failed to protect PDF: ${err.message}` });
+  }
+});
 
 
 // Global error handler for uncaught exceptions

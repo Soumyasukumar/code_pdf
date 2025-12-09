@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { FileText, RotateCw, RotateCcw, Download, X, Loader } from 'lucide-react';
+// Added ArrowDown for the upside-down icon
+import { FileText, RotateCw, RotateCcw, ArrowDown, Download, X, Loader } from 'lucide-react';
 
 const RotatePdf = () => {
   const [file, setFile] = useState(null);
@@ -25,7 +26,8 @@ const RotatePdf = () => {
 
   const handleRotation = (direction) => {
     if (!file) return;
-    // direction: 90 (right) or -90 (left)
+    // direction can be 90, -90, or 180
+    // We update the state so the user sees the total rotation to be applied
     setRotation((prev) => prev + direction);
   };
 
@@ -35,6 +37,9 @@ const RotatePdf = () => {
       return;
     }
     
+    // Allow 0 if the user rotated 90 then -90, but generally we want a change.
+    // However, if they explicitly want to process it (maybe to clean metadata), we can allow it.
+    // For now, let's block 0 to prevent useless requests.
     if (rotation === 0) {
       setError('Please select a rotation angle.');
       return;
@@ -42,10 +47,11 @@ const RotatePdf = () => {
 
     setLoading(true);
     setError('');
+    setSuccess(false);
     
     const formData = new FormData();
     formData.append('pdfFile', file);
-    formData.append('angle', rotation); // Send total calculated rotation
+    formData.append('angle', rotation); // Sends total rotation (e.g., 180)
 
     try {
       const response = await axios.post('http://localhost:5000/api/rotate-pdf', formData, {
@@ -56,15 +62,18 @@ const RotatePdf = () => {
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `rotated_${file.name}`);
+      link.setAttribute('download', `rotated_${rotation}_${file.name}`);
       document.body.appendChild(link);
       link.click();
       link.remove();
       
       setSuccess(true);
+      // Optional: Reset rotation after success? 
+      // setRotation(0); 
     } catch (err) {
       console.error(err);
-      setError('Failed to rotate PDF. Please try again.');
+      // Read the blob error message if possible
+      setError('Failed to rotate PDF. Check server console.');
     } finally {
       setLoading(false);
     }
@@ -82,7 +91,7 @@ const RotatePdf = () => {
       <div className="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden md:max-w-2xl p-8">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-800">Rotate PDF</h1>
-          <p className="text-gray-500 mt-2">Permanently rotate your PDF pages</p>
+          <p className="text-gray-500 mt-2">Rotate pages Left, Right, or Upside Down</p>
         </div>
 
         {/* Upload Area */}
@@ -120,32 +129,48 @@ const RotatePdf = () => {
 
             {/* Rotation Controls */}
             <div className="flex flex-col items-center justify-center space-y-4 py-6 border-t border-b border-gray-100">
-              <p className="text-sm font-medium text-gray-700">Set Rotation Angle</p>
+              <p className="text-sm font-medium text-gray-700">Select Rotation</p>
               
-              <div className="flex items-center space-x-6">
+              {/* Button Group */}
+              <div className="flex items-center justify-center space-x-4 w-full">
+                
+                {/* Left 90 */}
                 <button 
                   onClick={() => handleRotation(-90)}
-                  className="flex flex-col items-center p-3 rounded-lg hover:bg-gray-100 transition active:scale-95"
+                  className="flex flex-col items-center p-2 rounded-lg hover:bg-gray-100 transition active:scale-95 group"
                 >
-                  <div className="p-3 bg-white border shadow-sm rounded-full mb-2">
+                  <div className="p-3 bg-white border border-gray-200 shadow-sm rounded-full mb-2 group-hover:border-indigo-300">
                     <RotateCcw className="w-6 h-6 text-indigo-600" />
                   </div>
-                  <span className="text-xs font-medium">Left 90°</span>
+                  <span className="text-xs font-medium text-gray-600">Left 90°</span>
                 </button>
 
-                <div className="text-xl font-bold text-gray-800 w-16 text-center">
-                  {rotation}°
-                </div>
+                {/* Upside Down 180 (NEW) */}
+                <button 
+                  onClick={() => handleRotation(180)}
+                  className="flex flex-col items-center p-2 rounded-lg hover:bg-gray-100 transition active:scale-95 group"
+                >
+                  <div className="p-3 bg-white border border-gray-200 shadow-sm rounded-full mb-2 group-hover:border-indigo-300">
+                    <ArrowDown className="w-6 h-6 text-indigo-600" />
+                  </div>
+                  <span className="text-xs font-medium text-gray-600">180°</span>
+                </button>
 
+                {/* Right 90 */}
                 <button 
                   onClick={() => handleRotation(90)}
-                  className="flex flex-col items-center p-3 rounded-lg hover:bg-gray-100 transition active:scale-95"
+                  className="flex flex-col items-center p-2 rounded-lg hover:bg-gray-100 transition active:scale-95 group"
                 >
-                  <div className="p-3 bg-white border shadow-sm rounded-full mb-2">
+                  <div className="p-3 bg-white border border-gray-200 shadow-sm rounded-full mb-2 group-hover:border-indigo-300">
                     <RotateCw className="w-6 h-6 text-indigo-600" />
                   </div>
-                  <span className="text-xs font-medium">Right 90°</span>
+                  <span className="text-xs font-medium text-gray-600">Right 90°</span>
                 </button>
+              </div>
+
+              {/* Total Rotation Display */}
+              <div className="mt-2 px-4 py-1 bg-gray-100 rounded-full text-xs font-bold text-gray-600">
+                Total to apply: {rotation}°
               </div>
             </div>
 
@@ -161,12 +186,12 @@ const RotatePdf = () => {
               {loading ? (
                 <>
                   <Loader className="animate-spin -ml-1 mr-2 h-5 w-5" />
-                  Rotating...
+                  Processing...
                 </>
               ) : (
                 <>
                   <Download className="-ml-1 mr-2 h-5 w-5" />
-                  Download Rotated PDF
+                  Download PDF
                 </>
               )}
             </button>
@@ -175,14 +200,14 @@ const RotatePdf = () => {
 
         {/* Alerts */}
         {error && (
-          <div className="mt-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg text-center">
+          <div className="mt-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg text-center border border-red-200">
             {error}
           </div>
         )}
         
         {success && (
-          <div className="mt-4 p-3 bg-green-50 text-green-700 text-sm rounded-lg text-center">
-             Success! Check your downloads folder.
+          <div className="mt-4 p-3 bg-green-50 text-green-700 text-sm rounded-lg text-center border border-green-200">
+             ✅ Rotated PDF downloaded successfully!
           </div>
         )}
       </div>

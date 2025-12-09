@@ -13,6 +13,9 @@ import ExcelToPDF from './components/ExcelToPDF'; // ← new import
 import EditPDF from './components/EditPDF';
 import AddWatermark from './components/AddWatermark'; // ← ADD THIS
 import RotatePdf from './components/RotatePdf';
+import UnlockPdf from './components/UnlockPdf';
+import ProtectPdf from './components/ProtectPdf';
+
 import './components/AddWatermark.css'; // ← ADD THIS
 import './App.css';
 
@@ -79,6 +82,16 @@ function App() {
           <h2>Rotate PDF</h2>
           <RotatePdf />
         </div>
+        <div className="section">
+          <h2>Unlock PDF</h2>
+          <UnlockPdf />
+        </div>
+        <div className="section">
+          <h2>Protect PDF</h2>
+          <ProtectPdf />
+        </div>
+      
+
       </div>
     </div>
   );
