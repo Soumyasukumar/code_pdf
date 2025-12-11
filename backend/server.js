@@ -1742,45 +1742,85 @@ app.post('/api/rotate-pdf', upload.single('pdfFile'), async (req, res) => {
 });
 
 
-  app.post('/api/unlock-pdf', upload.single('pdfFile'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No PDF file uploaded' });
-  }
+// ------------------ UNLOCK PDF (Fixed: Uses QPDF via execFile) ------------------
+app.post('/api/unlock-pdf', upload.single('pdfFile'), async (req, res) => {
+  let inputPath = null;
+  let outputPath = null;
 
-  if (!req.body.password) {
-    return res.status(400).json({ error: 'Password is required' });
-  }
+  try {
+    console.log("🔓 Unlock PDF request received");
 
-  const input = req.file.path;
-  const output = input + "_unlocked.pdf";
-  const password = req.body.password.trim();
-
-  const qpdfPath = `"C:\\Program Files\\qpdf 12.2.0\\bin\\qpdf.exe"`;
-const cmd = `${qpdfPath} --password=${password} --decrypt "${input}" "${output}"`;
-
-
-  exec(cmd, async (err) => {
-    if (err) {
-      console.log("QPDF error:", err.message);
-
-      if (err.message.includes("invalid password")) {
-        return res.status(401).json({ error: "Incorrect password" });
-      }
-
-      return res.status(500).json({ error: "Failed to unlock PDF" });
+    // 1. Validation
+    if (!req.file) {
+      return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+    if (!req.body.password) {
+      return res.status(400).json({ error: 'Password is required' });
     }
 
-    // Success
-    const data = await fs.readFile(output);
+    inputPath = req.file.path;
+    // Create a temporary output filename
+    outputPath = path.join('uploads', `unlocked_${Date.now()}_${req.file.originalname}`);
+    const password = req.body.password.trim();
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="unlocked_${req.file.originalname}"`);
-    res.send(data);
+    // 2. Define QPDF Path
+    // Ensure this matches the path used in protect-pdf
+    const qpdfExe = 'C:\\Program Files\\qpdf 12.2.0\\bin\\qpdf.exe';
 
-    // Cleanup
-    await fs.unlink(input).catch(() => {});
-    await fs.unlink(output).catch(() => {});
-  });
+    // 3. Arguments for QPDF Decrypt
+    const args = [
+      `--password=${password}`, // Pass password specifically
+      '--decrypt',              // Decrypt mode
+      inputPath,                // Input file
+      outputPath                // Output file
+    ];
+
+    console.log(`Executing QPDF Decrypt...`);
+
+    // 4. Run QPDF using execFile
+    await new Promise((resolve, reject) => {
+      execFile(qpdfExe, args, (error, stdout, stderr) => {
+        if (error) {
+          // Check for specific "invalid password" message in stderr
+          if (stderr && stderr.includes('invalid password')) {
+             reject(new Error("INCORRECT_PASSWORD"));
+          } else {
+             console.error("QPDF Unlock Error:", stderr);
+             reject(new Error("Failed to unlock PDF."));
+          }
+        } else {
+          resolve(stdout);
+        }
+      });
+    });
+
+    console.log("✅ PDF Unlocked successfully!");
+
+    // 5. Send the Unlocked File
+    res.download(outputPath, `unlocked_${req.file.originalname}`, async (err) => {
+      if (err) console.error("Download Error:", err);
+      
+      // Cleanup files
+      await fs.unlink(inputPath).catch(() => {});
+      await fs.unlink(outputPath).catch(() => {});
+    });
+
+  } catch (err) {
+    // specific error handling for wrong password
+    if (err.message === "INCORRECT_PASSWORD") {
+        console.warn('⚠️ User provided incorrect password');
+        // Clean up input immediately
+        if (inputPath) await fs.unlink(inputPath).catch(() => {});
+        return res.status(401).json({ error: "Incorrect password" });
+    }
+
+    console.error('❌ Unlock PDF Failed:', err.message);
+    
+    // Cleanup input
+    if (inputPath) await fs.unlink(inputPath).catch(() => {});
+    
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.use(express.json());
@@ -1874,6 +1914,175 @@ app.post('/api/protect-pdf', upload.single('pdfFile'), async (req, res) => {
     
     // Send Error
     res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ------------------ ORGANIZE PDF (Reorder, Delete, Rotate) ------------------
+app.post('/api/organize-pdf', upload.single('pdfFile'), async (req, res) => {
+  let uploadedPath = null;
+
+  try {
+    console.log('📚 Organize PDF request received');
+
+    // 1. Validation
+    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
+    if (!req.body.pageOrder) return res.status(400).json({ error: 'Page order data is required' });
+
+    uploadedPath = req.file.path;
+
+    // Parse the instruction from frontend
+    // Expected Format: Array of objects [{ originalIndex: 0, rotate: 0 }, { originalIndex: 2, rotate: 90 }, ...]
+    // Note: The order of the array determines the new page sequence.
+    let pageInstructions;
+    try {
+        pageInstructions = JSON.parse(req.body.pageOrder);
+    } catch (e) {
+        return res.status(400).json({ error: 'Invalid JSON format for pageOrder' });
+    }
+
+    if (!Array.isArray(pageInstructions) || pageInstructions.length === 0) {
+        return res.status(400).json({ error: 'Page order cannot be empty' });
+    }
+
+    // 2. Load Original PDF
+    const pdfBytes = await fs.readFile(uploadedPath);
+    const sourcePdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const totalPages = sourcePdf.getPageCount();
+
+    // 3. Create New PDF
+    const newPdf = await PDFDocument.create();
+
+    // 4. Process Instructions
+    // We collect all needed indices first to batch copy (efficient)
+    const indicesToCopy = pageInstructions.map(p => p.originalIndex);
+    
+    // Validate indices
+    const validIndices = indicesToCopy.filter(i => i >= 0 && i < totalPages);
+    if (validIndices.length !== indicesToCopy.length) {
+        throw new Error("Invalid page index detected in request.");
+    }
+
+    // Copy pages to the new document
+    const copiedPages = await newPdf.copyPages(sourcePdf, indicesToCopy);
+
+    // Add pages to new PDF and apply rotation if needed
+    pageInstructions.forEach((instr, i) => {
+        const page = copiedPages[i];
+        
+        // Apply extra rotation if requested (on top of existing rotation)
+        // 'rotate' in instruction is relative (e.g., 90, 180, -90)
+        if (instr.rotate && instr.rotate !== 0) {
+            const currentRotation = page.getRotation().angle;
+            page.setRotation(degrees(currentRotation + instr.rotate));
+        }
+
+        newPdf.addPage(page);
+    });
+
+    // 5. Save and Send
+    const organizedPdfBytes = await newPdf.save();
+    const outputName = `organized_${req.file.originalname}`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+    res.send(Buffer.from(organizedPdfBytes));
+
+    // Log Success
+    await Operation.create({
+      operation: 'organize-pdf',
+      filename: req.file.originalname,
+      status: 'success'
+    });
+
+    // Cleanup
+    await fs.unlink(uploadedPath).catch(() => {});
+
+  } catch (err) {
+    console.error('❌ Organize PDF Error:', err);
+    await Operation.create({
+      operation: 'organize-pdf',
+      filename: req.file?.originalname || 'unknown',
+      status: 'failed'
+    }).catch(() => {});
+
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    res.status(500).json({ error: 'Failed to organize PDF: ' + err.message });
+  }
+});
+
+
+// ------------------ GET PDF THUMBNAILS (Fixed: Runs pdftoppm directly) ------------------
+app.post('/api/get-pdf-thumbnails', upload.single('pdfFile'), async (req, res) => {
+  const tempDir = path.join(__dirname, 'temp_thumbnails', `preview_${Date.now()}`);
+  let uploadedPath = null;
+
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    uploadedPath = req.file.path;
+
+    // Create temp directory
+    await fs.mkdir(tempDir, { recursive: true });
+
+    // Define output prefix (e.g. "uploads/temp/page")
+    const outPrefix = path.join(tempDir, 'page');
+    
+    // 1. Construct the command
+    // Syntax: pdftoppm -jpeg -scale-to 200 "InputFile" "OutputPrefix"
+    // We wrap paths in quotes to handle spaces safely
+    const cmd = `pdftoppm -jpeg -scale-to 200 "${uploadedPath}" "${outPrefix}"`;
+
+    console.log('🖼️ Generating thumbnails with command:', cmd);
+
+    // 2. Execute directly using child_process
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execPromise = util.promisify(exec);
+
+    try {
+        await execPromise(cmd);
+    } catch (execError) {
+        console.error("System Command Failed:", execError.message);
+        throw new Error("Failed to execute pdftoppm. Ensure Poppler is in System PATH.");
+    }
+
+    // 3. Read the generated images
+    let imageFiles = await fs.readdir(tempDir);
+    
+    // Sort files naturally (page-1, page-2, page-10...)
+    imageFiles = imageFiles
+      .filter(f => f.match(/\.(jpg|jpeg|png)$/i))
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/-(\d+)\./)?.[1] || 0);
+        const numB = parseInt(b.match(/-(\d+)\./)?.[1] || 0);
+        return numA - numB;
+      });
+
+    console.log(`✅ Generated ${imageFiles.length} thumbnails`);
+
+    // 4. Convert images to Base64 to send to frontend
+    const thumbnails = await Promise.all(imageFiles.map(async (file, index) => {
+        const filePath = path.join(tempDir, file);
+        const buffer = await fs.readFile(filePath);
+        return {
+            id: `page-${index}`,
+            originalIndex: index, // Maintain exact index
+            src: `data:image/jpeg;base64,${buffer.toString('base64')}`,
+            rotation: 0
+        };
+    }));
+
+    res.json({ thumbnails });
+
+    // 5. Cleanup
+    await fs.unlink(uploadedPath).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+
+  } catch (err) {
+    console.error('❌ Thumbnail Error:', err);
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    res.status(500).json({ error: 'Failed to generate previews: ' + err.message });
   }
 });
 

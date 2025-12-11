@@ -15,6 +15,7 @@ import AddWatermark from './components/AddWatermark'; // ← ADD THIS
 import RotatePdf from './components/RotatePdf';
 import UnlockPdf from './components/UnlockPdf';
 import ProtectPdf from './components/ProtectPdf';
+import OrganizePdf from './components/OrganizePdf';
 
 import './components/AddWatermark.css'; // ← ADD THIS
 import './App.css';
@@ -89,6 +90,10 @@ function App() {
         <div className="section">
           <h2>Protect PDF</h2>
           <ProtectPdf />
+        </div>
+        <div className="section">
+          <h2>Organize PDF</h2>
+          <OrganizePdf />
         </div>
       
 
