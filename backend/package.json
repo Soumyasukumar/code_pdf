@@ -19,6 +19,7 @@
     "canvas": "^3.2.0",
     "color": "^5.0.3",
     "cors": "^2.8.5",
+    "diff": "^8.0.2",
     "docx": "^9.5.1",
     "dotenv": "^17.2.3",
     "exceljs": "^4.4.0",
@@ -36,6 +37,8 @@
     "pdf-poppler": "^0.2.3",
     "pdfjs-dist": "^5.4.449",
     "pdfmake": "^0.2.20",
+    "pixelmatch": "^5.3.0",
+    "pngjs": "^7.0.0",
     "pptxgenjs": "^4.0.1",
     "unzipper": "^0.12.3",
     "xlsx": "^0.18.5"

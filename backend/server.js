@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const multer = require('multer');
 // const { PDFDocument } = require('pdf-lib');
 const fs = require('fs').promises; // Promise-based operations (readFile, writeFile)
-const fsBase = require('fs'); // <--- ADD THIS LINE: Imports the standard fs module for streams
+const fsBase = require('fs');
 const path = require('path');
 const cors = require('cors');
 const pdfParse = require('pdf-parse');
@@ -16,14 +16,16 @@ const archiver = require('archiver');
 const ExcelJS = require('exceljs'); 
 const { createReadStream } = require('fs');
 const unzipper = require('unzipper');
+const pixelmatch = require('pixelmatch');
+const { PNG } = require('pngjs');
+const diff = require('diff');
 
-// ✅ Use 'degrees' for text rotation
+// ✅ Use 'degrees' for text rotation rotate pdf feature
 const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
 const { exec } = require("child_process");
-// const path = require("path");
+// const path = require("path"); // path used previously but stayed halted accordingly.
 const Color = require('color'); // To parse hex color strings
 // const { PDFDocument, degrees } = require('pdf-lib'); // ← already correct
-
 
 
 // const PdfPrinter = require('pdfmake');        // ← only once, correct name
@@ -328,7 +330,6 @@ app.post('/api/pdf-to-word', upload.single('pdfFile'), async (req, res) => {
 });
 
 // ------------------ Word → PDF (FULLY WORKING) ------------------
-
 
 const PdfPrinter = require('pdfmake');
 const fonts = {
@@ -2086,6 +2087,375 @@ app.post('/api/get-pdf-thumbnails', upload.single('pdfFile'), async (req, res) =
   }
 });
 
+
+
+// ------------------ ADD PAGE NUMBERS ------------------
+app.post('/api/add-page-numbers', upload.single('pdfFile'), async (req, res) => {
+  let uploadedPath = null;
+
+  try {
+    console.log('🔢 Add Page Numbers request received');
+
+    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
+    
+    uploadedPath = req.file.path;
+    const settings = JSON.parse(req.body.settings);
+    
+    // Settings defaults
+    const {
+      position = 'bottom-center', // top-left, top-center, top-right, bottom-left...
+      margin = 30,                // Distance from edge
+      fromPage = 1,
+      toPage = 0,                 // 0 means last page
+      text = '{n}',               // Format: "Page {n}"
+      startFrom = 1,              // The number to start counting at
+      fontSize = 12,
+      fontFamily = 'Helvetica'
+    } = settings;
+
+    // Load PDF
+    const pdfBytes = await fs.readFile(uploadedPath);
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const pages = pdfDoc.getPages();
+    const totalPages = pdfDoc.getPageCount();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    // Determine Range
+    const startIdx = (parseInt(fromPage) || 1) - 1;
+    const endIdx = (parseInt(toPage) || totalPages) - 1;
+
+    // Iterate pages
+    for (let i = 0; i < totalPages; i++) {
+      // Skip if outside user's selected range
+      if (i < startIdx || i > endIdx) continue;
+
+      const page = pages[i];
+      const { width, height } = page.getSize();
+
+      // Calculate the actual number to print
+      // (i - startIdx) is how many pages we've processed in the range
+      const currentNumber = parseInt(startFrom) + (i - startIdx);
+      const textToDraw = text.replace('{n}', currentNumber).replace('{p}', totalPages);
+
+      // Calculate Text Dimensions
+      const textWidth = font.widthOfTextAtSize(textToDraw, parseInt(fontSize));
+      const textHeight = font.heightAtSize(parseInt(fontSize));
+
+      // Calculate Position (X, Y)
+      let x, y;
+      const m = parseInt(margin);
+
+      // Horizontal Logic
+      if (position.includes('left')) {
+        x = m;
+      } else if (position.includes('center')) {
+        x = (width / 2) - (textWidth / 2);
+      } else { // right
+        x = width - textWidth - m;
+      }
+
+      // Vertical Logic
+      if (position.includes('top')) {
+        y = height - textHeight - m;
+      } else { // bottom
+        y = m;
+      }
+
+      // Draw the number
+      page.drawText(textToDraw, {
+        x: x,
+        y: y,
+        size: parseInt(fontSize),
+        font: font,
+        color: rgb(0, 0, 0),
+      });
+    }
+
+    // Save and Send
+    const resultBytes = await pdfDoc.save();
+    const outputName = `numbered_${req.file.originalname}`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+    res.send(Buffer.from(resultBytes));
+
+    // Cleanup
+    await fs.unlink(uploadedPath).catch(() => {});
+    await Operation.create({ operation: 'page-numbers', filename: req.file.originalname, status: 'success' });
+
+  } catch (err) {
+    console.error('❌ Page Numbers Error:', err);
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    res.status(500).json({ error: 'Failed to add page numbers: ' + err.message });
+  }
+});
+
+
+// ------------------ CROP PDF ------------------
+app.post('/api/crop-pdf', upload.single('pdfFile'), async (req, res) => {
+  let uploadedPath = null;
+
+  try {
+    console.log('✂️ Crop PDF request received');
+
+    // 1. Validation
+    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
+    if (!req.body.cropData) return res.status(400).json({ error: 'Crop data is required' });
+
+    uploadedPath = req.file.path;
+    
+    // Parse frontend data
+    // crop: { x, y, width, height, unit: '%' } - values are percentages (0-100)
+    // pageSelection: 'all' or 'current'
+    // currentPageIndex: number (0-based)
+    const { crop, pageSelection, currentPageIndex } = JSON.parse(req.body.cropData);
+
+    if (!crop || crop.width === 0 || crop.height === 0) {
+        return res.status(400).json({ error: 'Please select an area to crop.' });
+    }
+
+    // 2. Load PDF
+    const pdfBytes = await fs.readFile(uploadedPath);
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const pages = pdfDoc.getPages();
+
+    // 3. Determine pages to crop
+    let pagesToProcess = [];
+    if (pageSelection === 'all') {
+        pagesToProcess = pages;
+    } else if (pageSelection === 'current' && currentPageIndex >= 0 && currentPageIndex < pages.length) {
+        pagesToProcess = [pages[currentPageIndex]];
+    } else {
+        throw new Error('Invalid page selection');
+    }
+
+    console.log(`Applying crop to ${pagesToProcess.length} page(s)...`);
+
+    // 4. Apply crop to each selected page
+    for (const page of pagesToProcess) {
+        const { width, height } = page.getSize();
+
+        // Convert percentage values from frontend to PDF points
+        // PDF origin (0,0) is bottom-left. Frontend origin is top-left.
+        
+        // Calculate dimensions
+        const cropWidth = (crop.width / 100) * width;
+        const cropHeight = (crop.height / 100) * height;
+
+        // Calculate X (distance from left is same for both)
+        const cropX = (crop.x / 100) * width;
+
+        // Calculate Y (distance from bottom)
+        // PDF Y = Page Height - (Top Margin from UI) - (Crop Height)
+        const cropY = height - ((crop.y / 100) * height) - cropHeight;
+
+        // Set both CropBox (visible area) and MediaBox (physical page size)
+        page.setCropBox(cropX, cropY, cropWidth, cropHeight);
+        page.setMediaBox(cropX, cropY, cropWidth, cropHeight);
+    }
+
+    // 5. Save and Send
+    const croppedPdfBytes = await pdfDoc.save();
+    const outputName = `cropped_${req.file.originalname}`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+    res.send(Buffer.from(croppedPdfBytes));
+
+    // Log & Cleanup
+    await Operation.create({ operation: 'crop-pdf', filename: req.file.originalname, status: 'success' });
+    await fs.unlink(uploadedPath).catch(() => {});
+
+  } catch (err) {
+    console.error('❌ Crop PDF Error:', err);
+    await Operation.create({
+      operation: 'crop-pdf',
+      filename: req.file?.originalname || 'unknown',
+      status: 'failed'
+    }).catch(() => {});
+
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    res.status(500).json({ error: 'Failed to crop PDF: ' + err.message });
+  }
+});
+
+
+
+
+// ------------------ COMPARE PDF (Fixed: Overlay & Semantic) ------------------
+app.post('/api/compare-pdf', upload.fields([{ name: 'file1' }, { name: 'file2' }]), async (req, res) => {
+  const tempDir = path.join(__dirname, 'temp_compare', `cmp_${Date.now()}`);
+  
+  try {
+    console.log('🔍 Compare PDF request received');
+
+    if (!req.files || !req.files['file1'] || !req.files['file2']) {
+        return res.status(400).json({ error: 'Please upload both PDF versions.' });
+    }
+
+    const mode = req.body.mode || 'overlay'; // 'overlay' or 'semantic'
+    const file1Path = req.files['file1'][0].path;
+    const file2Path = req.files['file2'][0].path;
+
+    // Output PDF
+    const resultPdf = await PDFDocument.create();
+
+    // ======================================================
+    // MODE 1: SEMANTIC TEXT COMPARISON (Text Diff)
+    // ======================================================
+    if (mode === 'semantic') {
+        console.log("📝 Running Semantic Text Comparison...");
+        
+        // Extract text
+        const buffer1 = await fs.readFile(file1Path);
+        const buffer2 = await fs.readFile(file2Path);
+        const data1 = await pdfParse(buffer1);
+        const data2 = await pdfParse(buffer2);
+
+        // Compute Text Diff
+        const diffs = diff.diffLines(data1.text, data2.text);
+
+        // Create Report Page
+        let page = resultPdf.addPage([595, 842]); // A4
+        const font = await resultPdf.embedFont(StandardFonts.Helvetica);
+        const fontBold = await resultPdf.embedFont(StandardFonts.HelveticaBold);
+        
+        let y = 800;
+        const margin = 50;
+        const fontSize = 10;
+        const lineHeight = 12;
+
+        // Title
+        page.drawText('Semantic Comparison Report', { x: margin, y, size: 18, font: fontBold, color: rgb(0, 0, 0) });
+        y -= 30;
+
+        for (const part of diffs) {
+            // Split into lines to handle wrapping/newlines
+            const lines = part.value.split('\n');
+            
+            // Set Color: Red for removed, Green for added, Gray for unchanged
+            let color = rgb(0.5, 0.5, 0.5); // Gray (unchanged)
+            let prefix = '  ';
+            if (part.added) {
+                color = rgb(0, 0.6, 0); // Green
+                prefix = '+ ';
+            }
+            if (part.removed) {
+                color = rgb(0.8, 0, 0); // Red
+                prefix = '- ';
+            }
+
+            // Draw Lines
+            for (const line of lines) {
+                if (line.trim().length === 0) continue; // Skip empty lines
+                
+                if (y < 50) { // New page if bottom reached
+                    page = resultPdf.addPage([595, 842]);
+                    y = 800;
+                }
+
+                // Truncate overly long lines to prevent crash
+                const safeLine = line.substring(0, 90); 
+
+                page.drawText(prefix + safeLine, { x: margin, y, size: fontSize, font: font, color });
+                y -= lineHeight;
+            }
+        }
+    } 
+    
+    // ======================================================
+    // MODE 2: VISUAL OVERLAY (Pixel Diff)
+    // ======================================================
+    else {
+        console.log("🖼️ Running Content Overlay Comparison...");
+        
+        await fs.mkdir(tempDir, { recursive: true });
+        const dir1 = path.join(tempDir, 'file1');
+        const dir2 = path.join(tempDir, 'file2');
+        await fs.mkdir(dir1);
+        await fs.mkdir(dir2);
+
+        // Convert PDFs to Images (pdftoppm)
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+
+        const cmd1 = `pdftoppm -png -rx 100 -ry 100 "${file1Path}" "${path.join(dir1, 'page')}"`;
+        const cmd2 = `pdftoppm -png -rx 100 -ry 100 "${file2Path}" "${path.join(dir2, 'page')}"`;
+        await Promise.all([execPromise(cmd1), execPromise(cmd2)]);
+
+        // Get Images
+        const getImages = async (dir) => {
+            const files = await fs.readdir(dir);
+            return files.filter(f => f.endsWith('.png')).sort((a, b) => {
+                const numA = parseInt(a.match(/-(\d+)\./)?.[1] || 0);
+                const numB = parseInt(b.match(/-(\d+)\./)?.[1] || 0);
+                return numA - numB;
+            });
+        };
+
+        const images1 = await getImages(dir1);
+        const images2 = await getImages(dir2);
+        const count = Math.min(images1.length, images2.length);
+
+        for (let i = 0; i < count; i++) {
+            const img1Path = path.join(dir1, images1[i]);
+            const img2Path = path.join(dir2, images2[i]);
+
+            const img1Data = PNG.sync.read(await fs.readFile(img1Path));
+            const img2Data = PNG.sync.read(await fs.readFile(img2Path));
+            
+            const { width, height } = img1Data;
+            const diffImage = new PNG({ width, height });
+
+            // Pixelmatch
+            const numDiffPixels = pixelmatch(
+                img1Data.data, img2Data.data, diffImage.data, width, height, 
+                { threshold: 0.1, alpha: 0.9, diffColor: [255, 0, 0] }
+            );
+
+            // 1. Embed Original Page (Background)
+            // We use the original PNG as the base layer so the user sees the context
+            const baseImage = await resultPdf.embedPng(await fs.readFile(img1Path));
+            
+            // 2. Embed Diff Layer (Foreground)
+            const diffBuffer = PNG.sync.write(diffImage);
+            const overlayImage = await resultPdf.embedPng(diffBuffer);
+
+            // 3. Draw to PDF Page
+            const page = resultPdf.addPage([width, height]);
+            
+            // Draw Original (Faded slightly to make red pop?) 
+            // Standard drawing is fine, red overlay is strong.
+            page.drawImage(baseImage, { x: 0, y: 0, width, height, opacity: 0.3 }); // Faded background
+            page.drawImage(overlayImage, { x: 0, y: 0, width, height }); // Sharp diffs
+            
+            // Label
+            page.drawText(`Visual Diff - Page ${i+1}`, { x: 20, y: 20, size: 14, color: rgb(1, 0, 0) });
+        }
+        
+        // Cleanup temp images
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+
+    // Common: Save & Send
+    const outputBytes = await resultPdf.save();
+    const outputName = `comparison_${mode}_${Date.now()}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+    res.send(Buffer.from(outputBytes));
+
+    // Cleanup inputs
+    await fs.unlink(file1Path).catch(() => {});
+    await fs.unlink(file2Path).catch(() => {});
+
+  } catch (err) {
+    console.error('❌ Comparison Error:', err);
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    res.status(500).json({ error: 'Failed to compare: ' + err.message });
+  }
+});
 
 
 // Global error handler for uncaught exceptions

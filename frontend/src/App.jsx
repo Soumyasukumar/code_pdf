@@ -16,6 +16,9 @@ import RotatePdf from './components/RotatePdf';
 import UnlockPdf from './components/UnlockPdf';
 import ProtectPdf from './components/ProtectPdf';
 import OrganizePdf from './components/OrganizePdf';
+import PageNumberPdf from './components/PageNumberPdf';
+import CropPdf from './components/CropPdf';
+import ComparePdf from './components/ComparePdf';
 
 import './components/AddWatermark.css'; // ← ADD THIS
 import './App.css';
@@ -94,6 +97,18 @@ function App() {
         <div className="section">
           <h2>Organize PDF</h2>
           <OrganizePdf />
+        </div>
+        <div className="section">
+          <h2>Page Number PDF</h2>
+          <PageNumberPdf />
+        </div>
+        <div className="section">
+          <h2>Crop PDF</h2>
+          <CropPdf />
+        </div>
+        <div className="section">
+          <h2>Compare PDF</h2>
+          <ComparePdf />
         </div>
       
 
