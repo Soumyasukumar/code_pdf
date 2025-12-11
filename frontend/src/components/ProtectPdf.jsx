@@ -27,7 +27,7 @@ const ProtectPdf = () => {
     setError('');
   };
 
-  const handleSubmit = async (e) => {
+ const handleSubmit = async (e) => {
     e.preventDefault();
     if (!file) return setError('Please upload a PDF file.');
     if (!password) return setError('Please enter a password.');
@@ -42,22 +42,40 @@ const ProtectPdf = () => {
 
     try {
       const response = await axios.post('http://localhost:5000/api/protect-pdf', formData, {
-        responseType: 'blob', // Important
+        responseType: 'blob', // We expect a binary file
       });
 
+      // Create download link
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
+      // Use the filename from the file state, or a default
       link.setAttribute('download', `protected_${file.name}`);
       document.body.appendChild(link);
       link.click();
       link.remove();
+      window.URL.revokeObjectURL(url); // Clean up memory
 
       setSuccess(true);
       setPassword('');
     } catch (err) {
-      console.error(err);
-      setError('Failed to protect PDF. Please try again.');
+      console.error("Error details:", err);
+      
+      // Helper to read the blob error message if available
+      if (err.response && err.response.data instanceof Blob) {
+        const reader = new FileReader();
+        reader.onload = () => {
+             try {
+                 const errorObj = JSON.parse(reader.result);
+                 setError(errorObj.error || 'Failed to protect PDF.');
+             } catch (e) {
+                 setError('Server error occurred.');
+             }
+        };
+        reader.readAsText(err.response.data);
+      } else {
+        setError('Failed to protect PDF. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
