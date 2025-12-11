@@ -1,3 +1,24 @@
+@import "tailwindcss";
+
+@layer components {
+  .btn-primary {
+    @apply bg-red-400 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg transition;
+  }
+  .btn-ghost {
+    @apply border border-gray-600 hover:bg-gray-800 text-gray-300 py-2 px-6 rounded-lg transition;
+  }
+}
+
+
+
+
+
+
+
+/* 
+
+
+
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
@@ -65,4 +86,4 @@ button:focus-visible {
   button {
     background-color: #f9f9f9;
   }
-}
+} */

@@ -1,119 +1,66 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import Home from './pages/Home';
+import AllTools from './pages/AllTools';
 import CompressPDF from './components/CompressPDF';
 import MergePDFs from './components/MergePDFs';
 import SplitPDF from './components/SplitPDF';
 import PDFtoWord from './components/PDFtoWord';
 import WordToPDF from './components/WordtoPDF';
-import PDFtoPowerpoint from './components/PDFtoPowerpoint'; // ← new import
+import PDFtoPowerpoint from './components/PDFtoPowerpoint';
 import JPGtoPDF from './components/JPGtoPDF';
 import PDFtoJPG from './components/PdftoJPG';
 import PDFtoExcel from './components/PDFtoExcel';
-import POWERPOINTtoPDF from './components/POWERPOINTtoPDF'; // ← new import
-import ExcelToPDF from './components/ExcelToPDF'; // ← new import
+import POWERPOINTtoPDF from './components/POWERPOINTtoPDF';
+import ExcelToPDF from './components/ExcelToPDF';
 import EditPDF from './components/EditPDF';
-import AddWatermark from './components/AddWatermark'; // ← ADD THIS
+import AddWatermark from './components/AddWatermark';
 import RotatePdf from './components/RotatePdf';
 import UnlockPdf from './components/UnlockPdf';
 import ProtectPdf from './components/ProtectPdf';
-import OrganizePdf from './components/OrganizePdf';
-import PageNumberPdf from './components/PageNumberPdf';
-import CropPdf from './components/CropPdf';
-import ComparePdf from './components/ComparePdf';
-
-import './components/AddWatermark.css'; // ← ADD THIS
-import './App.css';
-
 
 function App() {
+  const [theme, setTheme] = useState('dark');
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
   return (
-    <div className="App">
-      <h1>PDF Processor</h1>
-      <div className="container">
-        <div className="section">
-          <h2>Compress PDF</h2>
-          <CompressPDF />
-        </div>
-        <div className="section">
-          <h2>Merge PDFs</h2>
-          <MergePDFs />
-        </div>
-        <div className="section">
-          <h2>Split PDF</h2>
-          <SplitPDF />
-        </div>
-        <div className="section">
-          <h2>PDF to Word</h2>
-          <PDFtoWord />
-        </div>
-        <div className="section">
-          <h2>Word to PDF</h2>
-          <WordToPDF />
-        </div>
-        <div className="section">
-          <h2>PDF to PowerPoint</h2>
-          <PDFtoPowerpoint />
-        </div>
-        <div className="section">
-          <h2>JPG to PDF</h2>
-          <JPGtoPDF />
-        </div>
-        <div className="section">
-          <h2>PDF to JPG</h2>
-          <PDFtoJPG />
-        </div>
-        <div className="section">
-          <h2>PDF to Excel</h2>
-          <PDFtoExcel />
-        </div>
-
-        <div className="section">
-          <h2>Powerpoint to PDF</h2>
-          <POWERPOINTtoPDF />
-        </div>
-        <div className="section">
-          <h2>Excel to PDF</h2>
-          <ExcelToPDF />
-        </div>
-        <div className="App">
-          <h2>Edit PDF</h2>
-          <EditPDF />
-        </div>
-        <div className="section">
-          <h2>Add Watermark</h2>
-          <AddWatermark />
-        </div>
-        <div className="section">
-          <h2>Rotate PDF</h2>
-          <RotatePdf />
-        </div>
-        <div className="section">
-          <h2>Unlock PDF</h2>
-          <UnlockPdf />
-        </div>
-        <div className="section">
-          <h2>Protect PDF</h2>
-          <ProtectPdf />
-        </div>
-        <div className="section">
-          <h2>Organize PDF</h2>
-          <OrganizePdf />
-        </div>
-        <div className="section">
-          <h2>Page Number PDF</h2>
-          <PageNumberPdf />
-        </div>
-        <div className="section">
-          <h2>Crop PDF</h2>
-          <CropPdf />
-        </div>
-        <div className="section">
-          <h2>Compare PDF</h2>
-          <ComparePdf />
-        </div>
-      
-
+    <Router>
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors">
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/all-tools" element={<AllTools />} />
+          <Route path="/compress" element={<CompressPDF />} />
+          <Route path="/merge" element={<MergePDFs />} />
+          <Route path="/split" element={<SplitPDF />} />
+          <Route path="/pdf-to-word" element={<PDFtoWord />} />
+          <Route path="/word-to-pdf" element={<WordToPDF />} />
+          <Route path="/pdf-to-ppt" element={<PDFtoPowerpoint />} />
+          <Route path="/jpg-to-pdf" element={<JPGtoPDF />} />
+          <Route path="/pdf-to-jpg" element={<PDFtoJPG />} />
+          <Route path="/pdf-to-excel" element={<PDFtoExcel />} />
+          <Route path="/ppt-to-pdf" element={<POWERPOINTtoPDF />} />
+          <Route path="/excel-to-pdf" element={<ExcelToPDF />} />
+          <Route path="/edit" element={<EditPDF />} />
+          <Route path="/watermark" element={<AddWatermark />} />
+          <Route path="/rotate" element={<RotatePdf />} />
+          <Route path="/unlock" element={<UnlockPdf />} />
+          <Route path="/protect" element={<ProtectPdf />} />
+        </Routes>
+        <button
+          onClick={toggleTheme}
+          className="fixed bottom-6 right-6 z-50 p-3 bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900 rounded-full shadow-lg hover:scale-110 transition"
+        >
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
       </div>
-    </div>
+    </Router>
   );
 }
 
