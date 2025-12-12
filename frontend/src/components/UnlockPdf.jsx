@@ -1,177 +1,266 @@
+// src/components/UnlockPdf.jsx
 import React, { useState } from 'react';
 import axios from 'axios';
+import Navbar from './Navbar';
+import Footer from './Footer';
 
 const UnlockPdf = () => {
   const [file, setFile] = useState(null);
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [message, setMessage] = useState({ text: '', type: '' });
 
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0];
-      if (selectedFile.type !== 'application/pdf') {
-        setError('Please upload a valid PDF file.');
-        return;
-      }
-      setFile(selectedFile);
-      setError('');
-      setSuccess(false);
-    }
-  };
-
-  const handlePasswordChange = (e) => {
-    setPassword(e.target.value);
-    setError('');
-  };
-
-  const handleSubmit = async (e) => {
+  const handleDragOver = (e) => {
     e.preventDefault();
+    setIsDragging(true);
+  };
 
-    if (!file) {
-      setError('Please upload a PDF file.');
+  const handleDragLeave = () => setIsDragging(false);
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files?.[0]) validateAndSetFile(e.dataTransfer.files[0]);
+  };
+
+  const handleChange = (e) => {
+    if (e.target.files?.[0]) validateAndSetFile(e.target.files[0]);
+  };
+
+  const validateAndSetFile = (selectedFile) => {
+    if (selectedFile.type !== 'application/pdf') {
+      showMessage('Please upload a valid PDF file', 'error');
+      setFile(null);
       return;
     }
-    if (!password) {
-      setError('Please enter the document password.');
+    if (selectedFile.size > 50 * 1024 * 1024) {
+      showMessage('File too large. Max 50MB.', 'error');
+      setFile(null);
       return;
     }
+    setFile(selectedFile);
+    showMessage(`${selectedFile.name} ready for unlocking!`, 'success');
+  };
 
-    setLoading(true);
-    setError('');
-    setSuccess(false);
+  const showMessage = (text, type = 'info') => {
+    setMessage({ text, type });
+    setTimeout(() => setMessage({ text: '', type: '' }), 5000);
+  };
+
+  const handleUnlock = async () => {
+    if (!file) return showMessage('Please select a file first', 'error');
+    if (!password) return showMessage('Please enter the document password', 'error');
+
+    setIsLoading(true);
+    setProgress(0);
+    showMessage('Unlocking PDF...', 'info');
 
     const formData = new FormData();
     formData.append('pdfFile', file);
     formData.append('password', password);
 
     try {
+      const interval = setInterval(() => {
+        setProgress((prev) => (prev >= 90 ? prev : prev + Math.random() * 8));
+      }, 500);
+
       const response = await axios.post('http://localhost:5000/api/unlock-pdf', formData, {
-        responseType: 'blob', // Important for file download
+        responseType: 'blob',
+        timeout: 120000,
       });
 
-      // Create download link
-      const url = window.URL.createObjectURL(new Blob([response.data]));
+      clearInterval(interval);
+      setProgress(100);
+
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `unlocked_${file.name}`);
+      link.download = file.name.replace(/\.pdf$/i, '_unlocked.pdf');
       document.body.appendChild(link);
       link.click();
       link.remove();
+      window.URL.revokeObjectURL(url);
 
-      setSuccess(true);
-      setPassword(''); // Clear sensitive data
+      setFile(null);
+      setPassword('');
+      setProgress(0);
+      showMessage('✅ PDF unlocked successfully!', 'success');
     } catch (err) {
       console.error(err);
-      if (err.response && err.response.status === 401) {
-        setError('❌ Incorrect Password. Please try again.');
-      } else {
-        setError('Failed to unlock PDF. The file might be corrupted or the server is busy.');
-      }
+      showMessage(
+        err.response?.status === 401
+          ? '❌ Incorrect Password. Please try again.'
+          : 'Failed to unlock PDF. Server may be busy or file is corrupted.',
+        'error'
+      );
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
-  const removeFile = () => {
-    setFile(null);
-    setPassword('');
-    setError('');
-    setSuccess(false);
-  };
-
   return (
-    <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8 font-sans">
-      <div className="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden md:max-w-2xl p-8 border border-gray-100">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-800">Unlock PDF</h1>
-          <p className="text-gray-500 mt-2">Remove password security from your PDF</p>
-        </div>
+    <>
+      <Navbar />
 
-        {/* Upload Area */}
-        {!file ? (
-          <div className="flex items-center justify-center w-full">
-            <label className="flex flex-col items-center justify-center w-full h-56 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors">
-              <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                <span className="text-4xl mb-3">🔓</span>
-                <p className="mb-2 text-sm text-gray-500 font-semibold">Click to upload encrypted PDF</p>
-                <p className="text-xs text-gray-500">PDF files only (Max 50MB)</p>
-              </div>
-              <input 
-                type="file" 
-                className="hidden" 
-                accept="application/pdf" 
-                onChange={handleFileChange} 
+      {/* Hero Section */}
+      <section className="py-16 px-4 bg-gradient-to-b from-blue-50 to-white dark:from-gray-800 dark:to-gray-900">
+        <div className="max-w-4xl mx-auto text-center">
+          <h1 className="text-4xl md:text-5xl font-bold mb-4">
+            Unlock <span className="text-yellow-600">PDF</span>
+          </h1>
+          <p className="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
+            Remove password protection and download your PDF securely.
+          </p>
+        </div>
+      </section>
+
+      {/* Main Tool Section */}
+      <section className="py-16 px-4">
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-8 md:p-10 space-y-8">
+            {/* File Upload */}
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 ${
+                isDragging
+                  ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20'
+                  : 'border-gray-300 dark:border-gray-600'
+              } ${file ? 'bg-yellow-50 dark:bg-yellow-900/10' : ''}`}
+            >
+              <input
+                id="file-input"
+                type="file"
+                accept="application/pdf"
+                onChange={handleChange}
+                className="hidden"
               />
-            </label>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* File Info Card */}
-            <div className="flex items-center justify-between p-4 bg-yellow-50 rounded-lg border border-yellow-100">
-              <div className="flex items-center space-x-3">
-                <span className="text-2xl">🔒</span>
-                <div className="overflow-hidden">
-                  <p className="text-sm font-medium text-gray-900 truncate max-w-[200px]">{file.name}</p>
-                  <p className="text-xs text-gray-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+              <label htmlFor="file-input" className="cursor-pointer">
+                <div className="text-5xl mb-4">🔒</div>
+                <p className="text-lg font-medium text-gray-700 dark:text-gray-300">
+                  {file ? file.name : 'Drop your encrypted PDF here or click to upload'}
+                </p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Only PDF • Up to 50MB</p>
+              </label>
+
+              {file && (
+                <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-900/10 rounded-lg border border-yellow-200 dark:border-yellow-700 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">📄</span>
+                    <div>
+                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate max-w-[200px]">
+                        {file.name}
+                      </p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        {(file.size / 1024 / 1024).toFixed(2)} MB
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFile(null);
+                      setPassword('');
+                    }}
+                    className="text-red-500 hover:text-red-700 font-bold text-xl"
+                  >
+                    ×
+                  </button>
                 </div>
-              </div>
-              <button onClick={removeFile} className="text-gray-400 hover:text-red-500 font-bold px-2">
-                ✕
-              </button>
+              )}
             </div>
 
             {/* Password Input */}
-            <div className="relative">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Enter Password</label>
+            {file && (
               <input
                 type="password"
                 value={password}
-                onChange={handlePasswordChange}
-                placeholder="Document Password"
-                className="block w-full px-4 py-3 rounded-md border border-gray-300 shadow-sm focus:ring-yellow-500 focus:border-yellow-500 sm:text-sm"
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter PDF password"
+                className="block w-full px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 shadow-sm focus:ring-yellow-500 focus:border-yellow-500 sm:text-sm mt-4"
               />
+            )}
+
+            {/* Unlock Button */}
+            {file && (
+              <button
+                type="button"
+                onClick={handleUnlock}
+                disabled={isLoading}
+                className={`w-full py-4 px-6 rounded-lg font-semibold text-white text-lg transition-all duration-200 flex items-center justify-center gap-3 ${
+                  isLoading
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-yellow-600 hover:bg-yellow-700 active:scale-95 shadow-lg'
+                }`}
+              >
+                {isLoading ? (
+                  <>
+                    <span className="animate-spin">⏳</span> Unlocking...
+                  </>
+                ) : (
+                  'Unlock PDF'
+                )}
+              </button>
+            )}
+
+            {/* Progress */}
+            {isLoading && (
+              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 mt-4">
+                <div
+                  className="bg-yellow-500 h-3 rounded-full transition-all"
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
+            )}
+
+            {/* Message */}
+            {message.text && (
+              <div
+                className={`p-4 rounded-lg text-sm flex items-center gap-2 ${
+                  message.type === 'success'
+                    ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                    : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+                }`}
+              >
+                <span>{message.type === 'success' ? '✅' : '❌'}</span>
+                <span>{message.text}</span>
+              </div>
+            )}
+
+            {/* Features */}
+            <div className="mt-10 grid md:grid-cols-3 gap-6">
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow flex flex-col items-center gap-2">
+                <div className="text-4xl mb-2">🔑</div>
+                <h3 className="font-bold text-lg">Secure Unlock</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
+                  Your files remain private and secure
+                </p>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow flex flex-col items-center gap-2">
+                <div className="text-4xl mb-2">⚡</div>
+                <h3 className="font-bold text-lg">Fast Processing</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
+                  Unlock PDFs quickly and efficiently
+                </p>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow flex flex-col items-center gap-2">
+                <div className="text-4xl mb-2">📂</div>
+                <h3 className="font-bold text-lg">Download Ready</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
+                  Get your unlocked PDF immediately
+                </p>
+              </div>
             </div>
+          </div>
+        </div>
+      </section>
 
-            {/* Action Button */}
-            <button
-              onClick={handleSubmit}
-              disabled={loading}
-              className={`w-full flex items-center justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white transition-all
-                ${loading 
-                  ? 'bg-yellow-400 cursor-not-allowed' 
-                  : 'bg-yellow-600 hover:bg-yellow-700 focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500'}`}
-            >
-              {loading ? (
-                <>
-                  <span className="animate-spin mr-2">⏳</span>
-                  Unlocking...
-                </>
-              ) : (
-                <>
-                  <span className="mr-2">🔓</span>
-                  Unlock & Download
-                </>
-              )}
-            </button>
-          </div>
-        )}
-
-        {/* Alerts */}
-        {error && (
-          <div className="mt-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg text-center border border-red-200">
-            {error}
-          </div>
-        )}
-        
-        {success && (
-          <div className="mt-4 p-3 bg-green-50 text-green-700 text-sm rounded-lg text-center border border-green-200">
-             ✅ File unlocked and downloaded!
-          </div>
-        )}
-      </div>
-    </div>
+      <Footer />
+    </>
   );
 };
 
