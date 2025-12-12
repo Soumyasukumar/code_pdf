@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import LogoImage from '../assets/logo.png';
 import { Link, useLocation } from 'react-router-dom';
 import { Menu, X, MoreVertical } from 'lucide-react';
 
@@ -13,8 +14,12 @@ const Navbar = () => {
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
           <Link to="/" className="flex items-center space-x-2">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">
-              P
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center">
+              <img 
+                src={LogoImage} 
+                alt="PDFPro Logo" 
+                className="w-full h-full object-contain p-1"
+              />
             </div>
             <span className="font-bold text-xl">PDFPro</span>
           </Link>
