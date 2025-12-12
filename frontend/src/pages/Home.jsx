@@ -21,6 +21,10 @@ export const tools = [
   { title: 'Rotate PDF', desc: 'Fix orientation of pages', icon: '🔄', path: '/rotate', category: 'Edit PDF' },
   { title: 'Unlock PDF', desc: 'Remove password protection', icon: '🔓', path: '/unlock', category: 'PDF Security' },
   { title: 'Protect PDF', desc: 'Add password encryption', icon: '🔐', path: '/protect', category: 'PDF Security' },
+  { title: 'Organise PDF', desc: 'Reorder, insert, or delete pages in a PDF', icon: '🧹', path: '/organize', category: 'Organize PDF' },
+  { title: 'Page Number PDF', desc: 'Insert page numbers into a PDF document', icon: '🔢', path: '/page-number', category: 'Edit PDF' },
+  { title: 'Compare PDF', desc: 'Identify differences between two PDF files', icon: '🔍', path: '/compare', category: 'Organize PDF' },
+  { title: 'Crop PDF', desc: 'Adjust PDF margins and crop pages', icon: '📐', path: '/crop', category: 'Edit PDF' },
 ];
 
 const categories = ['All', 'Organize PDF', 'Optimize PDF', 'Convert PDF', 'Edit PDF', 'PDF Security'];

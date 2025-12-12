@@ -9,7 +9,7 @@ import PDFtoWord from './components/PDFtoWord';
 import WordToPDF from './components/WordtoPDF';
 import PDFtoPowerpoint from './components/PDFtoPowerpoint';
 import JPGtoPDF from './components/JPGtoPDF';
-import PDFtoJPG from './components/PdftoJPG';
+import PDFtoJPG from './components/PDFtoJPG';
 import PDFtoExcel from './components/PDFtoExcel';
 import POWERPOINTtoPDF from './components/POWERPOINTtoPDF';
 import ExcelToPDF from './components/ExcelToPDF';
@@ -18,6 +18,10 @@ import AddWatermark from './components/AddWatermark';
 import RotatePdf from './components/RotatePdf';
 import UnlockPdf from './components/UnlockPdf';
 import ProtectPdf from './components/ProtectPdf';
+import OrganizePdf from './components/OrganizePdf';
+import CropPdf from './components/CropPdf';
+import PageNumberPdf from './components/PageNumberPdf';
+import ComparePdf from './components/ComparePdf';
 
 function App() {
   const [theme, setTheme] = useState('dark');
@@ -52,6 +56,10 @@ function App() {
           <Route path="/rotate" element={<RotatePdf />} />
           <Route path="/unlock" element={<UnlockPdf />} />
           <Route path="/protect" element={<ProtectPdf />} />
+          <Route path="/organize" element={<OrganizePdf />} />
+          <Route path="/crop" element={<CropPdf />} />
+          <Route path="/page-number" element={<PageNumberPdf />} />
+          <Route path="/compare" element={<ComparePdf />} />
         </Routes>
         <button
           onClick={toggleTheme}
