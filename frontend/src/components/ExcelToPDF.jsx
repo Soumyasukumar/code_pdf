@@ -1,6 +1,8 @@
 // src/components/ExcelToPDF.jsx
 import React, { useState, useRef } from 'react';
 import axios from 'axios';
+import Navbar from '../components/Navbar';
+import Footer from '../components/Footer';
 
 const ExcelToPDF = () => {
   const [file, setFile] = useState(null);

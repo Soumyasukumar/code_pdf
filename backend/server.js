@@ -13,7 +13,7 @@ const { JSDOM } = require('jsdom');
 const Poppler = require('pdf-poppler');
 const PptxGenJS = require('pptxgenjs');
 const archiver = require('archiver');
-const ExcelJS = require('exceljs'); 
+const ExcelJS = require('exceljs');
 const { createReadStream } = require('fs');
 const unzipper = require('unzipper');
 const pixelmatch = require('pixelmatch');
@@ -48,13 +48,13 @@ const Operation = mongoose.model('Operation', operationSchema);
 app.use(cors());
 app.use(express.json());
 // Increase the limit for text fields (like your base64 image) to 50MB
-const upload = multer({ 
-  dest: 'uploads/', 
-  limits: { fieldSize: 50 * 1024 * 1024 } 
+const upload = multer({
+  dest: 'uploads/',
+  limits: { fieldSize: 50 * 1024 * 1024 }
 });
 
 // Create uploads folder
-fs.mkdir('uploads', { recursive: true }).catch(() => {});
+fs.mkdir('uploads', { recursive: true }).catch(() => { });
 
 // MongoDB connection
 mongoose.connect(process.env.MONGO_URI, {
@@ -65,59 +65,114 @@ mongoose.connect(process.env.MONGO_URI, {
   .catch(err => console.error('MongoDB error:', err));
 
 
-  // Helper function to get the built-in PDFLib font based on style flags
+// Helper function to get the built-in PDFLib font based on style flags
 const getFontAndStyle = (pdfDoc, fontFamily, isBold, isItalic) => {
-    let fontName = fontFamily;
-    if (fontFamily === 'Helvetica') {
-        if (isBold && isItalic) fontName = StandardFonts.HelveticaBoldOblique;
-        else if (isBold) fontName = StandardFonts.HelveticaBold;
-        else if (isItalic) fontName = StandardFonts.HelveticaOblique;
-        else fontName = StandardFonts.Helvetica;
-    } else if (fontFamily === 'Times-Roman') {
-        if (isBold && isItalic) fontName = StandardFonts.TimesRomanBoldItalic;
-        else if (isBold) fontName = StandardFonts.TimesRomanBold;
-        else if (isItalic) fontName = StandardFonts.TimesRomanItalic;
-        else fontName = StandardFonts.TimesRoman;
-    } else if (fontFamily === 'Courier') {
-        if (isBold && isItalic) fontName = StandardFonts.CourierBoldOblique;
-        else if (isBold) fontName = StandardFonts.CourierBold;
-        else if (isItalic) fontName = StandardFonts.CourierOblique;
-        else fontName = StandardFonts.Courier;
-    }
-    // Load the font
-    return pdfDoc.embedFont(fontName);
+  let fontName = fontFamily;
+  if (fontFamily === 'Helvetica') {
+    if (isBold && isItalic) fontName = StandardFonts.HelveticaBoldOblique;
+    else if (isBold) fontName = StandardFonts.HelveticaBold;
+    else if (isItalic) fontName = StandardFonts.HelveticaOblique;
+    else fontName = StandardFonts.Helvetica;
+  } else if (fontFamily === 'Times-Roman') {
+    if (isBold && isItalic) fontName = StandardFonts.TimesRomanBoldItalic;
+    else if (isBold) fontName = StandardFonts.TimesRomanBold;
+    else if (isItalic) fontName = StandardFonts.TimesRomanItalic;
+    else fontName = StandardFonts.TimesRoman;
+  } else if (fontFamily === 'Courier') {
+    if (isBold && isItalic) fontName = StandardFonts.CourierBoldOblique;
+    else if (isBold) fontName = StandardFonts.CourierBold;
+    else if (isItalic) fontName = StandardFonts.CourierOblique;
+    else fontName = StandardFonts.Courier;
+  }
+  // Load the font
+  return pdfDoc.embedFont(fontName);
 };
 
 // Helper to calculate (x, y) coordinates for the 9-point grid
 const calculatePosition = (pageWidth, pageHeight, textWidth, textHeight, positionKey) => {
-    const margin = 20; // Small margin from the edges
-    let x, y;
+  const margin = 20; // Small margin from the edges
+  let x, y;
 
-    // Horizontal Alignment
-    if (positionKey.includes('left')) {
-        x = margin;
-    } else if (positionKey.includes('center')) {
-        x = (pageWidth / 2) - (textWidth / 2);
-    } else if (positionKey.includes('right')) {
-        x = pageWidth - textWidth - margin;
+  // Horizontal Alignment
+  if (positionKey.includes('left')) {
+    x = margin;
+  } else if (positionKey.includes('center')) {
+    x = (pageWidth / 2) - (textWidth / 2);
+  } else if (positionKey.includes('right')) {
+    x = pageWidth - textWidth - margin;
+  }
+
+  // Vertical Alignment
+  if (positionKey.includes('top')) {
+    y = pageHeight - textHeight - margin;
+  } else if (positionKey.includes('center')) {
+    y = (pageHeight / 2) - (textHeight / 2);
+  } else if (positionKey.includes('bottom')) {
+    y = margin;
+  }
+
+  // Ensure central position is calculated correctly for center-center
+  if (positionKey === 'center-center') {
+    x = (pageWidth / 2) - (textWidth / 2);
+    y = (pageHeight / 2) - (textHeight / 2);
+  }
+
+  return { x, y };
+};
+
+
+// New Helper: Converts hex color to PDF-Lib RGB object
+const hexToRgb = (hex) => {
+    const color = Color(hex);
+    return rgb(color.red() / 255, color.green() / 255, color.blue() / 255);
+};
+
+// New Helper: Applies basic Excel cell styles for the PDF rendering
+const getCellStyles = (cell) => {
+    const isHeader = cell.row.number === 1;
+    const isBold = isHeader || cell.style?.font?.bold;
+    const isItalic = cell.style?.font?.italic;
+    const isUnderline = cell.style?.font?.underline;
+    const fontName = cell.style?.font?.name || 'Helvetica';
+    const fontSize = cell.style?.font?.size ? cell.style.font.size * 0.75 : (isHeader ? 10 : 9); // Scale font size for PDF points
+
+    let cellRgbColor = rgb(0, 0, 0); // Default black text
+    if (cell.style?.font?.color?.argb) {
+        // ExcelJS colors are in ARGB (alpha-red-green-blue)
+        const argb = cell.style.font.color.argb;
+        const hex = argb.length === 8 ? `#${argb.substring(2)}` : `#${argb}`; // Remove alpha channel if present
+        try {
+            cellRgbColor = hexToRgb(hex);
+        } catch (e) {
+            console.warn(`Invalid font color: ${argb}`);
+        }
     }
 
-    // Vertical Alignment
-    if (positionKey.includes('top')) {
-        y = pageHeight - textHeight - margin;
-    } else if (positionKey.includes('center')) {
-        y = (pageHeight / 2) - (textHeight / 2);
-    } else if (positionKey.includes('bottom')) {
-        y = margin;
+    let fillColor = null;
+    if (cell.style?.fill?.fgColor?.argb) {
+        const argb = cell.style.fill.fgColor.argb;
+        const hex = argb.length === 8 ? `#${argb.substring(2)}` : `#${argb}`;
+        try {
+            fillColor = hexToRgb(hex);
+        } catch (e) {
+            console.warn(`Invalid fill color: ${argb}`);
+        }
+    }
+    
+    // Fallback/Header style
+    if (cell.row.number === 1 && !fillColor) {
+        fillColor = rgb(0.85, 0.85, 0.85); // Light gray for header background
     }
 
-    // Ensure central position is calculated correctly for center-center
-    if (positionKey === 'center-center') {
-      x = (pageWidth / 2) - (textWidth / 2);
-      y = (pageHeight / 2) - (textHeight / 2);
-    }
-
-    return { x, y };
+    return {
+        isBold,
+        isItalic,
+        isUnderline,
+        fontName,
+        fontSize,
+        textColor: cellRgbColor,
+        fillColor
+    };
 };
 
 
@@ -275,8 +330,8 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
 
     res.download(outputPath, outputName, async (err) => {
       if (err) console.error('❌ Error sending split file:', err);
-      await fs.unlink(uploadedPath).catch(() => {});
-      await fs.unlink(outputPath).catch(() => {});
+      await fs.unlink(uploadedPath).catch(() => { });
+      await fs.unlink(outputPath).catch(() => { });
     });
   } catch (err) {
     console.error('❌ Split PDF error:', err);
@@ -284,8 +339,8 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
       operation: 'split',
       filename: req.file?.originalname || 'unknown',
       status: 'failed',
-    }).catch(() => {});
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    }).catch(() => { });
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
     res.status(500).json({ error: 'Failed to split PDF: ' + err.message });
   }
 });
@@ -399,7 +454,7 @@ app.post('/api/word-to-pdf', upload.single('wordFile'), async (req, res) => {
       operation: 'word-to-pdf',
       filename: req.file?.originalname || 'unknown',
       status: 'failed'
-    }).catch(() => {});
+    }).catch(() => { });
 
     if (uploadedPath) await fs.unlink(uploadedPath);
     res.status(500).json({ error: 'Conversion failed: ' + err.message });
@@ -444,15 +499,15 @@ app.post('/api/pdf-to-ppt', upload.single('pdfFile'), async (req, res) => {
 
     // Send to frontend
     res.download(outputPath, outputName, async () => {
-      await fs.unlink(uploadedPath).catch(() => {});
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-      await fs.unlink(outputPath).catch(() => {});
+      await fs.unlink(uploadedPath).catch(() => { });
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => { });
+      await fs.unlink(outputPath).catch(() => { });
     });
 
   } catch (err) {
     console.error('PDF → PPT error:', err);
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => { });
     res.status(500).json({ error: 'Failed to convert PDF to PowerPoint: ' + err.message });
   }
 });
@@ -471,19 +526,19 @@ app.post('/api/jpg-to-pdf', upload.array('images'), async (req, res) => {
     for (const file of req.files) {
       const filePath = file.path;
       const imageBytes = await fs.readFile(filePath);
-      
+
       let image;
       // We try to embed as JPG. If the user uploads a PNG by mistake, 
       // we try to handle it, otherwise catch the error.
       try {
-          if (file.mimetype === 'image/png') {
-             image = await pdfDoc.embedPng(imageBytes);
-          } else {
-             image = await pdfDoc.embedJpg(imageBytes);
-          }
+        if (file.mimetype === 'image/png') {
+          image = await pdfDoc.embedPng(imageBytes);
+        } else {
+          image = await pdfDoc.embedJpg(imageBytes);
+        }
       } catch (e) {
-          console.warn(`Skipping file ${file.originalname} - format not supported.`);
-          continue; 
+        console.warn(`Skipping file ${file.originalname} - format not supported.`);
+        continue;
       }
 
       // Get image dimensions
@@ -508,10 +563,10 @@ app.post('/api/jpg-to-pdf', upload.array('images'), async (req, res) => {
     await fs.writeFile(outputPath, pdfBytes);
 
     // Log operation
-    await Operation.create({ 
-      operation: 'jpg-to-pdf', 
-      filename: `${req.files.length} files`, 
-      status: 'success' 
+    await Operation.create({
+      operation: 'jpg-to-pdf',
+      filename: `${req.files.length} files`,
+      status: 'success'
     });
 
     res.download(outputPath, outputName, async (err) => {
@@ -528,17 +583,17 @@ app.post('/api/jpg-to-pdf', upload.array('images'), async (req, res) => {
 
   } catch (err) {
     console.error('JPG → PDF error:', err);
-    await Operation.create({ 
-      operation: 'jpg-to-pdf', 
-      filename: 'batch', 
-      status: 'failed' 
+    await Operation.create({
+      operation: 'jpg-to-pdf',
+      filename: 'batch',
+      status: 'failed'
     });
-    
+
     // Cleanup uploaded files on error
     if (req.files) {
-        req.files.forEach(f => fs.unlink(f.path).catch(() => {}));
+      req.files.forEach(f => fs.unlink(f.path).catch(() => { }));
     }
-    
+
     res.status(500).json({ error: 'Failed to convert images to PDF: ' + err.message });
   }
 });
@@ -597,15 +652,15 @@ app.post('/api/pdf-to-jpg', upload.single('pdfFile'), async (req, res) => {
     });
 
     res.download(zipPath, zipName, async () => {
-      await fs.unlink(uploadedPath).catch(() => {});
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-      await fs.unlink(zipPath).catch(() => {});
+      await fs.unlink(uploadedPath).catch(() => { });
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => { });
+      await fs.unlink(zipPath).catch(() => { });
     });
 
   } catch (err) {
     console.error('PDF → JPG error:', err);
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => { });
     res.status(500).json({ error: 'Failed: ' + err.message });
   }
 });
@@ -614,109 +669,109 @@ app.post('/api/pdf-to-jpg', upload.single('pdfFile'), async (req, res) => {
 // ------------------ PDF → Excel (simple table extraction) ------------------
 // Note: We use fsBase for the createReadStream needed for streaming the response.
 app.post('/api/pdf-to-excel', upload.single('pdfFile'), async (req, res) => {
-    let uploadedPath = null;
-    let outputPath = null;
+  let uploadedPath = null;
+  let outputPath = null;
 
-    try {
-        if (!req.file) {
-            await Operation.create({ operation: 'pdf-to-excel', filename: 'none', status: 'failed' });
-            return res.status(400).json({ error: 'No PDF file uploaded' });
-        }
-
-        uploadedPath = req.file.path;
-
-        // --- Conversion Logic (Same as before) ---
-        const dataBuffer = await fs.readFile(uploadedPath);
-        const pdfData = await pdfParse(dataBuffer);
-        const rawText = pdfData.text || "";
-        if (!rawText.trim()) throw new Error("PDF contains no readable text.");
-
-        const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-        const splitLine = (line) => {
-            if (line.includes('\t')) return line.split('\t').map(c => c.trim());
-            if (line.includes('|')) return line.split('|').map(c => c.trim());
-            if (/\s{2,}/.test(line)) return line.split(/\s{2,}/).map(c => c.trim()).filter(Boolean);
-            return [line];
-        };
-
-        let rows = lines.map(splitLine).filter(r => r.length > 0);
-        const maxCols = rows.reduce((max, r) => Math.max(max, r.length), 0);
-        rows = rows.map(r => {
-            while (r.length < maxCols) r.push(""); 
-            return r;
-        });
-        
-        if (maxCols === 0 && rows.length > 0) {
-            // Log this as a soft failure if the text extraction was poor
-            console.warn("Conversion warning: PDF text extracted but columns could not be reliably split.");
-        }
-        // --- End Conversion Logic ---
-
-        // 4. Create Excel file
-        const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet('Sheet1');
-        rows.forEach(r => worksheet.addRow(r));
-
-        const outputName = req.file.originalname.replace(/\.pdf$/i, '') + ".xlsx";
-        outputPath = path.join("uploads", outputName);
-
-        await workbook.xlsx.writeFile(outputPath);
-
-        await Operation.create({
-            operation: "pdf-to-excel",
-            filename: req.file.originalname,
-            status: "success"
-        });
-
-        // 5. MANUAL STREAMING FOR RELIABILITY (Replaces res.download)
-        const fileStream = fsBase.createReadStream(outputPath);
-
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
-        
-        // Pipe the file stream to the response stream
-        fileStream.pipe(res);
-
-        // Crucial: Handle stream errors and cleanup when the response finishes
-        fileStream.on('error', (streamErr) => {
-            console.error('File stream error:', streamErr);
-            // Don't send status if headers are already sent, but ensure client gets some closure
-            if (!res.headersSent) {
-                res.status(500).json({ error: 'Server failed to stream the output file.' });
-            }
-        });
-        
-        res.on('finish', async () => {
-            console.log('Download complete. Cleaning up files.');
-            // Cleanup files after the client has received the response
-            try {
-                if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
-                if (outputPath) await fs.unlink(outputPath).catch(() => {});
-            } catch (cleanupErr) {
-                console.error('Final cleanup failed:', cleanupErr);
-            }
-        });
-
-
-    } catch (err) {
-        console.error("PDF → Excel error:", err);
-        
-        await Operation.create({ 
-            operation: 'pdf-to-excel', 
-            filename: req.file?.originalname || 'unknown', 
-            status: 'failed' 
-        });
-        
-        // Cleanup uploaded file on main error path
-        if (uploadedPath) {
-            await fs.unlink(uploadedPath).catch(cleanErr => console.error("Cleanup error:", cleanErr));
-        }
-        
-        // Send JSON error response (This is what the client fix expects)
-        if (!res.headersSent) {
-            res.status(500).json({ error: "Failed to convert PDF to Excel: " + err.message });
-        }
+  try {
+    if (!req.file) {
+      await Operation.create({ operation: 'pdf-to-excel', filename: 'none', status: 'failed' });
+      return res.status(400).json({ error: 'No PDF file uploaded' });
     }
+
+    uploadedPath = req.file.path;
+
+    // --- Conversion Logic (Same as before) ---
+    const dataBuffer = await fs.readFile(uploadedPath);
+    const pdfData = await pdfParse(dataBuffer);
+    const rawText = pdfData.text || "";
+    if (!rawText.trim()) throw new Error("PDF contains no readable text.");
+
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const splitLine = (line) => {
+      if (line.includes('\t')) return line.split('\t').map(c => c.trim());
+      if (line.includes('|')) return line.split('|').map(c => c.trim());
+      if (/\s{2,}/.test(line)) return line.split(/\s{2,}/).map(c => c.trim()).filter(Boolean);
+      return [line];
+    };
+
+    let rows = lines.map(splitLine).filter(r => r.length > 0);
+    const maxCols = rows.reduce((max, r) => Math.max(max, r.length), 0);
+    rows = rows.map(r => {
+      while (r.length < maxCols) r.push("");
+      return r;
+    });
+
+    if (maxCols === 0 && rows.length > 0) {
+      // Log this as a soft failure if the text extraction was poor
+      console.warn("Conversion warning: PDF text extracted but columns could not be reliably split.");
+    }
+    // --- End Conversion Logic ---
+
+    // 4. Create Excel file
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Sheet1');
+    rows.forEach(r => worksheet.addRow(r));
+
+    const outputName = req.file.originalname.replace(/\.pdf$/i, '') + ".xlsx";
+    outputPath = path.join("uploads", outputName);
+
+    await workbook.xlsx.writeFile(outputPath);
+
+    await Operation.create({
+      operation: "pdf-to-excel",
+      filename: req.file.originalname,
+      status: "success"
+    });
+
+    // 5. MANUAL STREAMING FOR RELIABILITY (Replaces res.download)
+    const fileStream = fsBase.createReadStream(outputPath);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+
+    // Pipe the file stream to the response stream
+    fileStream.pipe(res);
+
+    // Crucial: Handle stream errors and cleanup when the response finishes
+    fileStream.on('error', (streamErr) => {
+      console.error('File stream error:', streamErr);
+      // Don't send status if headers are already sent, but ensure client gets some closure
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Server failed to stream the output file.' });
+      }
+    });
+
+    res.on('finish', async () => {
+      console.log('Download complete. Cleaning up files.');
+      // Cleanup files after the client has received the response
+      try {
+        if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
+        if (outputPath) await fs.unlink(outputPath).catch(() => { });
+      } catch (cleanupErr) {
+        console.error('Final cleanup failed:', cleanupErr);
+      }
+    });
+
+
+  } catch (err) {
+    console.error("PDF → Excel error:", err);
+
+    await Operation.create({
+      operation: 'pdf-to-excel',
+      filename: req.file?.originalname || 'unknown',
+      status: 'failed'
+    });
+
+    // Cleanup uploaded file on main error path
+    if (uploadedPath) {
+      await fs.unlink(uploadedPath).catch(cleanErr => console.error("Cleanup error:", cleanErr));
+    }
+
+    // Send JSON error response (This is what the client fix expects)
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to convert PDF to Excel: " + err.message });
+    }
+  }
 });
 
 
@@ -746,41 +801,41 @@ app.post('/api/ppt-to-pdf', upload.single('pptFile'), async (req, res) => {
 
     // Method 1: Try using PptxGenJS to render slides as images
     let slideImages = [];
-    
+
     try {
       // Extract slides using PptxGenJS
       const pptx = new PptxGenJS();
       await pptx.loadFile(uploadedPath); // Load the PPTX file
-      
+
       const slideCount = pptx.getSlideCount();
       console.log(`📊 Found ${slideCount} slides`);
 
       for (let i = 0; i < slideCount; i++) {
         const tempImagePath = path.join(tempDir, `slide_${i + 1}.png`);
-        
+
         // Render slide as PNG
         const slideImageBuffer = await pptx.renderSlideAsImage(i);
         await fs.writeFile(tempImagePath, slideImageBuffer);
-        
+
         slideImages.push(tempImagePath);
         console.log(`✅ Slide ${i + 1} rendered`);
       }
     } catch (pptxError) {
       console.log('⚠️ PptxGenJS method failed, trying ZIP extraction method...');
-      
+
       // Method 2: Fallback - Extract images from PPTX ZIP structure
       const AdmZip = require('adm-zip');
       const zip = new AdmZip(uploadedPath);
-      
+
       // Extract to temp directory
       zip.extractAllTo(tempDir, true);
-      
+
       // Find slide images in PPTX structure
       const pptSlidesDir = path.join(tempDir, 'ppt', 'slides');
       const mediaDir = path.join(tempDir, 'ppt', 'media');
-      
+
       let allImages = [];
-      
+
       // Check slides directory
       if (await fs.access(pptSlidesDir).then(() => true).catch(() => false)) {
         const slideFiles = await fs.readdir(pptSlidesDir);
@@ -790,7 +845,7 @@ app.post('/api/ppt-to-pdf', upload.single('pptFile'), async (req, res) => {
             .map(f => path.join(pptSlidesDir, f))
         );
       }
-      
+
       // Check media directory for embedded images
       if (await fs.access(mediaDir).then(() => true).catch(() => false)) {
         const mediaFiles = await fs.readdir(mediaDir);
@@ -805,7 +860,7 @@ app.post('/api/ppt-to-pdf', upload.single('pptFile'), async (req, res) => {
             .map(f => path.join(mediaDir, f))
         );
       }
-      
+
       slideImages = allImages.slice(0, 20); // Limit to first 20 slides
     }
 
@@ -817,14 +872,14 @@ app.post('/api/ppt-to-pdf', upload.single('pptFile'), async (req, res) => {
 
     // Create PDF from images
     const pdfDoc = await PDFDocument.create();
-    
+
     for (let i = 0; i < slideImages.length; i++) {
       const imgPath = slideImages[i];
-      
+
       try {
         const imgBytes = await fs.readFile(imgPath);
         const ext = path.extname(imgPath).toLowerCase();
-        
+
         let image;
         if (ext === '.png') {
           image = await pdfDoc.embedPng(imgBytes);
@@ -835,25 +890,25 @@ app.post('/api/ppt-to-pdf', upload.single('pptFile'), async (req, res) => {
         // Standard PowerPoint slide size (10x5.625 inches at 72 DPI)
         const pageWidth = 720;  // 10 inches
         const pageHeight = 405; // 5.625 inches
-        
+
         const page = pdfDoc.addPage([pageWidth, pageHeight]);
-        
+
         // Scale image to fit page while maintaining aspect ratio
         const { width: imgWidth, height: imgHeight } = image.scale(1);
         const scale = Math.min(pageWidth / imgWidth, pageHeight / imgHeight);
         const scaledWidth = imgWidth * scale;
         const scaledHeight = imgHeight * scale;
-        
+
         const x = (pageWidth - scaledWidth) / 2;
         const y = (pageHeight - scaledHeight) / 2;
-        
+
         page.drawImage(image, {
           x,
           y,
           width: scaledWidth,
           height: scaledHeight,
         });
-        
+
       } catch (imgError) {
         console.warn(`⚠️ Failed to process image ${imgPath}:`, imgError.message);
         continue;
@@ -879,177 +934,268 @@ app.post('/api/ppt-to-pdf', upload.single('pptFile'), async (req, res) => {
 
   } catch (err) {
     console.error('❌ PPTX → PDF Error:', err);
-    
+
     await Operation.create({
       operation: 'ppt-to-pdf',
       filename: req.file?.originalname || 'unknown',
       status: 'failed'
     });
 
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to convert PowerPoint to PDF',
       details: err.message
     });
   } finally {
     // Cleanup
     if (uploadedPath) {
-      await fs.unlink(uploadedPath).catch(() => {});
+      await fs.unlink(uploadedPath).catch(() => { });
     }
     if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => { });
     }
   }
 });
 
 
-  // ------------------ Excel → PDF (FIXED ENDPOINT) ------------------
-  app.post('/api/excel-to-pdf', upload.single('excelFile'), async (req, res) => {
+// ------------------ Excel → PDF (PROFESSIONAL LANDSCAPE FIX) ------------------
+app.post('/api/excel-to-pdf', upload.single('excelFile'), async (req, res) => {
     let uploadedPath = null;
 
     try {
-      console.log('📥 Excel to PDF request received');
-      console.log('File:', req.file);
+        console.log('📥 Professional Excel to PDF request received (Landscape Mode)');
 
-      // Validation
-      if (!req.file) {
-        console.log('❌ No file uploaded');
-        await Operation.create({ operation: 'excel-to-pdf', filename: 'none', status: 'failed' });
-        return res.status(400).json({ error: 'No Excel file uploaded' });
-      }
-
-      if (!req.file.originalname.toLowerCase().match(/\.xlsx?$/i)) {
-        console.log('❌ Invalid file type:', req.file.originalname);
-        await Operation.create({ operation: 'excel-to-pdf', filename: req.file.originalname, status: 'failed' });
-        return res.status(400).json({ error: 'Please upload a valid .xlsx or .xls file' });
-      }
-
-      if (req.file.size > 50 * 1024 * 1024) { // 50MB
-        console.log('❌ File too large:', req.file.size);
-        await Operation.create({ operation: 'excel-to-pdf', filename: req.file.originalname, status: 'failed' });
-        return res.status(413).json({ error: 'File too large. Maximum size is 50MB' });
-      }
-
-      uploadedPath = req.file.path;
-      console.log('🔄 Converting Excel:', req.file.originalname);
-
-      // Read Excel file using ExcelJS
-      const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.readFile(uploadedPath);
-      
-      const pdfDoc = await PDFDocument.create();
-      const worksheets = workbook.worksheets;
-      
-      console.log(`📊 Found ${worksheets.length} worksheets`);
-
-      if (worksheets.length === 0) {
-        throw new Error('No worksheets found in Excel file');
-      }
-
-      let pageIndex = 0;
-      for (const worksheet of worksheets) {
-        const sheetName = worksheet.name || `Sheet${pageIndex + 1}`;
-        console.log(`📄 Processing worksheet: ${sheetName}`);
-        
-        // Create page for each worksheet
-        const pageWidth = 595; // A4
-        const pageHeight = 842;
-        const page = pdfDoc.addPage([pageWidth, pageHeight]);
-        
-        // Title
-        page.drawText(sheetName, {
-          x: 50,
-          y: pageHeight - 50,
-          size: 16,
-          font: await pdfDoc.embedFont('Helvetica-Bold')
-        });
-
-        let currentY = pageHeight - 80;
-        const rowHeight = 16;
-        const colWidth = 70;
-        const marginLeft = 50;
-
-        // Get data
-        const rows = [];
-        worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-          const rowData = [];
-          row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-            let cellValue = '';
-            if (cell.value !== null && cell.value !== undefined) {
-              cellValue = cell.value.toString().substring(0, 30); // Truncate long text
-            }
-            rowData.push(cellValue);
-          });
-          rows.push(rowData);
-        });
-
-        // Draw rows
-        for (let rowIndex = 0; rowIndex < Math.min(rows.length, 40); rowIndex++) { // Limit to 40 rows per sheet
-          if (currentY < 100) break; // Stop if page is full
-          
-          const rowData = rows[rowIndex];
-          let colX = marginLeft;
-          
-          for (let colIndex = 0; colIndex < Math.min(rowData.length, 8); colIndex++) { // 8 columns max
-            if (colX > pageWidth - 50) break;
-            
-            const cellText = rowData[colIndex] || '';
-            const fontSize = rowIndex === 0 ? 10 : 9; // Headers slightly larger
-            const font = rowIndex === 0 ? await pdfDoc.embedFont('Helvetica-Bold') : await pdfDoc.embedFont('Helvetica');
-            
-            page.drawText(cellText, {
-              x: colX,
-              y: currentY,
-              size: fontSize,
-              font,
-              maxWidth: colWidth - 5
-            });
-            colX += colWidth;
-          }
-          currentY -= rowHeight;
+        // --- 1. Validation ---
+        if (!req.file || !req.file.originalname.toLowerCase().match(/\.xlsx?$/i)) {
+            return res.status(400).json({ error: 'Please upload a valid .xlsx or .xls file' });
         }
-        
-        pageIndex++;
-      }
+        uploadedPath = req.file.path;
 
-      const pdfBytes = await pdfDoc.save();
-      const outputName = req.file.originalname.replace(/\.xlsx?$/i, '.pdf');
+        // --- 2. Load Excel ---
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.readFile(uploadedPath);
+        const worksheets = workbook.worksheets;
 
-      // Log success
-      await Operation.create({
-        operation: 'excel-to-pdf',
-        filename: req.file.originalname,
-        status: 'success'
-      });
+        // --- 3. Setup PDF (Landscape A4) ---
+        const pdfDoc = await PDFDocument.create();
+        const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+        const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-      console.log(`✅ PDF created successfully: ${outputName}`);
+        // Landscape Dimensions (swapped width/height)
+        const PAGE_WIDTH = 841.89;
+        const PAGE_HEIGHT = 595.28;
+        const MARGIN = 30; // Slightly smaller margin for max space
+        const PAGE_CONTENT_WIDTH = PAGE_WIDTH - (2 * MARGIN);
+        const BASE_ROW_HEIGHT = 16;
 
-      // Send PDF
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
-      res.send(pdfBytes);
+        let totalPageIndex = 1;
+
+        // --- INTERNAL HELPERS ---
+
+        // Helper: Convert Hex to RGB safely
+        const safeHexToRgb = (hex) => {
+            try {
+                // Remove '#' if present
+                const cleanHex = hex.replace('#', '');
+                // Parse hex to r, g, b (0-255)
+                const bigint = parseInt(cleanHex, 16);
+                const r = (bigint >> 16) & 255;
+                const g = (bigint >> 8) & 255;
+                const b = bigint & 255;
+                return rgb(r / 255, g / 255, b / 255);
+            } catch (e) {
+                return rgb(0, 0, 0);
+            }
+        };
+
+        // Helper: Draw Header (Title + Page Num)
+        const drawPageHeader = (page, sheetName, pageNumber) => {
+            // Sheet Title
+            page.drawText(sheetName.substring(0, 60), {
+                x: MARGIN,
+                y: PAGE_HEIGHT - MARGIN + 10,
+                size: 12,
+                font: helveticaBold,
+                color: rgb(0.2, 0.2, 0.2)
+            });
+            // Page Number
+            const pageNumText = `Page ${pageNumber}`;
+            const textWidth = helvetica.widthOfTextAtSize(pageNumText, 9);
+            page.drawText(pageNumText, {
+                x: PAGE_WIDTH - MARGIN - textWidth,
+                y: PAGE_HEIGHT - MARGIN + 10,
+                size: 9,
+                font: helvetica,
+                color: rgb(0.5, 0.5, 0.5)
+            });
+            // Header Line
+            page.drawLine({
+                start: { x: MARGIN, y: PAGE_HEIGHT - MARGIN - 2 },
+                end: { x: PAGE_WIDTH - MARGIN, y: PAGE_HEIGHT - MARGIN - 2 },
+                thickness: 1,
+                color: rgb(0.7, 0.7, 0.7)
+            });
+        };
+
+        // Helper: Draw Single Cell
+        const drawCell = (page, text, x, y, w, h, isHeader, fillColor) => {
+            // Background
+            if (fillColor) {
+                page.drawRectangle({
+                    x, y, width: w, height: h,
+                    color: fillColor,
+                    borderColor: rgb(0.8, 0.8, 0.8),
+                    borderWidth: 0.5,
+                });
+            } else {
+                // Border only
+                page.drawRectangle({
+                    x, y, width: w, height: h,
+                    borderColor: rgb(0.8, 0.8, 0.8),
+                    borderWidth: 0.5,
+                });
+            }
+
+            // Text
+            if (text) {
+                const fontSize = isHeader ? 8 : 7; // Smaller font for data density
+                const font = isHeader ? helveticaBold : helvetica;
+                
+                // Truncate text to fit width
+                // Approx width char factor ~0.5 of font size
+                const maxChars = Math.floor((w - 4) / (fontSize * 0.5));
+                let cleanText = String(text).trim();
+                
+                if (cleanText.length > maxChars) {
+                    cleanText = cleanText.substring(0, maxChars - 1) + '…';
+                }
+
+                // Center text vertically
+                const textY = y + (h / 2) - (fontSize / 2.5);
+                
+                page.drawText(cleanText, {
+                    x: x + 3, // Padding left
+                    y: textY,
+                    size: fontSize,
+                    font: font,
+                    color: rgb(0, 0, 0),
+                });
+            }
+        };
+
+        // --- 4. Process Worksheets ---
+        for (const worksheet of worksheets) {
+            // Determine dimensions
+            let numCols = worksheet.columnCount;
+            if (numCols === 0) {
+                worksheet.eachRow((row) => { numCols = Math.max(numCols, row.cellCount); });
+            }
+            if (numCols === 0 || worksheet.rowCount === 0) continue;
+
+            const sheetName = worksheet.name || `Sheet`;
+
+            // Calculate Optimal Widths
+            let colWidths = [];
+            let totalContentWidth = 0;
+
+            // Sample first 50 rows to find max width per column
+            for (let c = 1; c <= numCols; c++) {
+                let maxLen = 0;
+                // Header length
+                const headerVal = worksheet.getRow(1).getCell(c).value;
+                if (headerVal) maxLen = String(headerVal).length;
+
+                // Data length
+                for (let r = 2; r <= Math.min(worksheet.rowCount, 50); r++) {
+                    const val = worksheet.getRow(r).getCell(c).value;
+                    if (val) {
+                        const len = String(val).length;
+                        if (len > maxLen) maxLen = len;
+                    }
+                }
+                // Base width: chars * 4.5pts + padding. Min 25, Max 120.
+                let w = Math.min(Math.max(maxLen * 4.5 + 8, 25), 120);
+                colWidths.push(w);
+                totalContentWidth += w;
+            }
+
+            // Scale widths to fit Landscape Page
+            const scaleFactor = Math.min(1, PAGE_CONTENT_WIDTH / totalContentWidth);
+            colWidths = colWidths.map(w => w * scaleFactor);
+
+            // Start Output
+            let currentPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+            let currentY = PAGE_HEIGHT - MARGIN - BASE_ROW_HEIGHT;
+            drawPageHeader(currentPage, sheetName, totalPageIndex);
+
+            // Loop Rows
+            for (let r = 1; r <= worksheet.rowCount; r++) {
+                const row = worksheet.getRow(r);
+                const isHeader = (r === 1);
+                
+                // Pagination Check
+                if (currentY < MARGIN + BASE_ROW_HEIGHT) {
+                    totalPageIndex++;
+                    currentPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+                    drawPageHeader(currentPage, sheetName, totalPageIndex);
+                    currentY = PAGE_HEIGHT - MARGIN - BASE_ROW_HEIGHT;
+
+                    // Repeat Header on new page
+                    if (!isHeader) {
+                        const headerRow = worksheet.getRow(1);
+                        let hX = MARGIN;
+                        for (let c = 0; c < numCols; c++) {
+                            let cellVal = headerRow.getCell(c + 1).value || '';
+                            if(typeof cellVal === 'object') cellVal = cellVal.result || ''; // Handle formulas
+                            
+                            // Header Style (Light Gray Background)
+                            drawCell(currentPage, cellVal, hX, currentY, colWidths[c], BASE_ROW_HEIGHT, true, rgb(0.9, 0.9, 0.9));
+                            hX += colWidths[c];
+                        }
+                        currentY -= BASE_ROW_HEIGHT;
+                    }
+                }
+
+                // Draw Current Row
+                // Skip drawing original header if we just did a pagination header (rare edge case, usually safe)
+                
+                let rX = MARGIN;
+                for (let c = 0; c < numCols; c++) {
+                    let cellVal = row.getCell(c + 1).value;
+                    if (cellVal && typeof cellVal === 'object') {
+                        if(cellVal.text) cellVal = cellVal.text; // Rich text
+                        else if(cellVal.result !== undefined) cellVal = cellVal.result; // Formula
+                    }
+                    if (cellVal === null || cellVal === undefined) cellVal = '';
+
+                    // Header gets gray background, Data gets white (or alternate if you want)
+                    const bg = isHeader ? rgb(0.9, 0.9, 0.9) : null;
+                    
+                    drawCell(currentPage, cellVal, rX, currentY, colWidths[c], BASE_ROW_HEIGHT, isHeader, bg);
+                    rX += colWidths[c];
+                }
+                currentY -= BASE_ROW_HEIGHT;
+            }
+            totalPageIndex++;
+        }
+
+        // --- 5. Finalize ---
+        const pdfBytes = await pdfDoc.save();
+        const outputName = req.file.originalname.replace(/\.xlsx?$/i, '_Professional.pdf');
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+        res.send(Buffer.from(pdfBytes));
+
+        // Cleanup
+        await Operation.create({ operation: 'excel-to-pdf', filename: req.file.originalname, status: 'success' });
+        if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
 
     } catch (err) {
-      console.error('❌ Excel → PDF Error:', err);
-      
-      await Operation.create({
-        operation: 'excel-to-pdf',
-        filename: req.file?.originalname || 'unknown',
-        status: 'failed'
-      });
-
-      // Send detailed error response
-      res.status(500).json({ 
-        error: 'Failed to convert Excel to PDF',
-        details: err.message,
-        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-      });
-    } finally {
-      // Cleanup
-      if (uploadedPath) {
-        await fs.unlink(uploadedPath).catch(err => console.error('Cleanup error:', err));
-      }
+        console.error('❌ Excel PDF Error:', err);
+        if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+        res.status(500).json({ error: 'Conversion failed: ' + err.message });
     }
-  });
+});
 
 
 // ------------------ PDF EDIT ENDPOINT - FULLY FIXED ✅ ------------------
@@ -1059,7 +1205,7 @@ app.post('/api/edit-pdf', upload.single('pdfFile'), async (req, res) => {
 
   try {
     console.log('📥 Edit PDF request received...');
-    
+
     if (!req.file || !req.body.editData) {
       console.log('❌ Missing file or edits');
       return res.status(400).json({ error: 'Missing file or edits' });
@@ -1082,7 +1228,7 @@ app.post('/api/edit-pdf', upload.single('pdfFile'), async (req, res) => {
     for (let i = 0; i < edits.length; i++) {
       const edit = edits[i];
       console.log(`🔧 Processing edit ${i + 1}/${edits.length}:`, edit.type, 'on page', edit.pageIndex);
-      
+
       if (edit.pageIndex >= pages.length) {
         console.warn(`⚠️ Skipping edit ${i}: Invalid page ${edit.pageIndex}`);
         continue;
@@ -1105,7 +1251,7 @@ app.post('/api/edit-pdf', upload.single('pdfFile'), async (req, res) => {
     // Save edited PDF
     const editedBytes = await pdfDoc.save();
     const outputName = `edited_${Date.now()}_${req.file.originalname}`;
-    
+
     console.log('✅ PDF edited successfully!');
 
     // Send directly as response
@@ -1138,10 +1284,10 @@ async function addTextToPage(page, pdfDoc, edit) {
 
   // Embed font
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  
+
   // ✅ FIXED: Create color using pdf-lib's standard method
   const colorRgb = rgbFromHex(color);
-  
+
   // Draw text
   page.drawText(text, {
     x: Number(x),
@@ -1181,12 +1327,12 @@ async function addRectangleToPage(page, edit) {
 function rgbFromHex(hex) {
   // Remove # if present
   let cleanHex = hex.replace('#', '');
-  
+
   // Handle 3-digit hex
   if (cleanHex.length === 3) {
     cleanHex = cleanHex.split('').map(char => char + char).join('');
   }
-  
+
   // Handle 6-digit hex
   if (cleanHex.length !== 6) {
     console.warn('⚠️ Invalid hex color, using black:', hex);
@@ -1213,7 +1359,7 @@ function rgbFromHex(hex) {
 async function addTextToPDF(pdfDoc, edit) {
   try {
     const { pageIndex, x = 50, y = 750, text = '', fontSize = 12, color = '#000000' } = edit;
-    
+
     if (!text.trim()) {
       console.warn('⚠️ Empty text skipped');
       return;
@@ -1226,10 +1372,10 @@ async function addTextToPDF(pdfDoc, edit) {
 
     const page = pdfDoc.getPage(pageIndex);
     const helveticaFont = await pdfDoc.embedFont('Helvetica');
-    
+
     // Convert hex color to RGB (0-1 scale for pdf-lib)
     const rgbColor = hexToRgb(color);
-    
+
     console.log(`✏️ Adding text: "${text.substring(0, 30)}..." at (${x}, ${y})`);
 
     page.drawText(text, {
@@ -1258,7 +1404,7 @@ async function addRectangleToPDF(pdfDoc, edit) {
 
     const page = pdfDoc.getPage(pageIndex);
     const rgbColor = hexToRgb(color);
-    
+
     console.log(`📦 Adding rectangle: (${x}, ${y}) ${width}x${height}`);
 
     page.drawRectangle({
@@ -1279,26 +1425,26 @@ async function addRectangleToPDF(pdfDoc, edit) {
 }
 
 // ✅ FIXED: Correct hexToRgb function for pdf-lib
-function hexToRgb(hex) {
-  // Remove # if present
-  hex = hex.replace('#', '');
-  
-  // Handle 3-digit hex
-  if (hex.length === 3) {
-    hex = hex.split('').map(char => char + char).join('');
-  }
-  
-  if (hex.length !== 6) {
-    console.warn('⚠️ Invalid hex color:', hex);
-    return { r: 0, g: 0, b: 0 };
-  }
+// function hexToRgb(hex) {
+//   // Remove # if present
+//   hex = hex.replace('#', '');
 
-  const r = parseInt(hex.substring(0, 2), 16) / 255;
-  const g = parseInt(hex.substring(2, 4), 16) / 255;
-  const b = parseInt(hex.substring(4, 6), 16) / 255;
+//   // Handle 3-digit hex
+//   if (hex.length === 3) {
+//     hex = hex.split('').map(char => char + char).join('');
+//   }
 
-  return { r, g, b };
-}
+//   if (hex.length !== 6) {
+//     console.warn('⚠️ Invalid hex color:', hex);
+//     return { r: 0, g: 0, b: 0 };
+//   }
+
+//   const r = parseInt(hex.substring(0, 2), 16) / 255;
+//   const g = parseInt(hex.substring(2, 4), 16) / 255;
+//   const b = parseInt(hex.substring(4, 6), 16) / 255;
+
+//   return { r, g, b };
+// }
 
 // ------------------ PDF PAGE COUNT ENDPOINT (FIXED) ------------------
 app.post('/api/pdf-page-count', upload.single('pdfFile'), async (req, res) => {
@@ -1315,13 +1461,13 @@ app.post('/api/pdf-page-count', upload.single('pdfFile'), async (req, res) => {
     // Validate file type and size
     if (!req.file.originalname.toLowerCase().match(/\.pdf$/i)) {
       console.log('❌ Invalid file type:', req.file.originalname);
-      await fs.unlink(req.file.path).catch(() => {});
+      await fs.unlink(req.file.path).catch(() => { });
       return res.status(400).json({ error: 'Please upload a valid .pdf file' });
     }
 
     if (req.file.size > 50 * 1024 * 1024) { // 50MB limit
       console.log('❌ File too large:', req.file.size);
-      await fs.unlink(req.file.path).catch(() => {});
+      await fs.unlink(req.file.path).catch(() => { });
       return res.status(413).json({ error: 'File too large. Maximum size is 50MB' });
     }
 
@@ -1331,10 +1477,10 @@ app.post('/api/pdf-page-count', upload.single('pdfFile'), async (req, res) => {
     // Load PDF with encryption ignore
     const pdfBytes = await fs.readFile(uploadedPath);
     console.log('📊 PDF bytes loaded:', pdfBytes.length);
-    
+
     const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
     const pageCount = pdfDoc.getPageCount();
-    
+
     console.log('✅ Page count successful:', pageCount);
 
     // Send JSON response FIRST
@@ -1346,7 +1492,7 @@ app.post('/api/pdf-page-count', upload.single('pdfFile'), async (req, res) => {
   } catch (err) {
     console.error('❌ Page count error:', err.message);
     console.error('Full stack:', err.stack); // Log full error for debugging
-    
+
     // Always send JSON error response
     if (!res.headersSent) {
       res.status(500).json({ error: 'Failed to get page count: ' + err.message });
@@ -1354,7 +1500,7 @@ app.post('/api/pdf-page-count', upload.single('pdfFile'), async (req, res) => {
       // Fallback if headers sent (rare)
       res.end(JSON.stringify({ error: 'Server error during PDF processing' }));
     }
-    
+
     // Cleanup on error
     if (uploadedPath) {
       await fs.unlink(uploadedPath).catch(console.error);
@@ -1365,21 +1511,21 @@ app.post('/api/pdf-page-count', upload.single('pdfFile'), async (req, res) => {
 // ------------------ HELPER FUNCTIONS FOR PDF EDITING ------------------
 async function addTextToPDF(pdfDoc, edit) {
   const { pageIndex, x, y, text, fontSize = 12, color = '#000000' } = edit;
-  
+
   if (pageIndex >= pdfDoc.getPageCount()) {
     console.warn('⚠️ Page index out of bounds:', pageIndex);
     return;
   }
-  
+
   const page = pdfDoc.getPage(pageIndex);
   const helveticaFont = await pdfDoc.embedFont('Helvetica');
-  
+
   // Convert hex color to rgb
   const hexColor = color.startsWith('#') ? color : `#${color}`;
   const rgbValues = hexToRgb(hexColor);
-  
+
   console.log(`✏️ Adding text "${text.substring(0, 20)}..." at (${x}, ${y})`);
-  
+
   page.drawText(text, {
     x: parseFloat(x),
     y: parseFloat(y),
@@ -1392,17 +1538,17 @@ async function addTextToPDF(pdfDoc, edit) {
 async function addImageToPDF(pdfDoc, edit) {
   const { pageIndex, x, y, width, height, imageData } = edit;
   const page = pdfDoc.getPage(pageIndex);
-  
+
   // Convert base64 image data to bytes
   const imageBytes = Buffer.from(imageData.split(',')[1], 'base64');
-  
+
   let image;
   try {
     image = await pdfDoc.embedPng(imageBytes); // Try PNG first
   } catch {
     image = await pdfDoc.embedJpg(imageBytes); // Fallback to JPG
   }
-  
+
   page.drawImage(image, {
     x: parseFloat(x),
     y: parseFloat(y),
@@ -1413,18 +1559,18 @@ async function addImageToPDF(pdfDoc, edit) {
 
 async function addRectangleToPDF(pdfDoc, edit) {
   const { pageIndex, x, y, width, height, color = '#FF0000' } = edit;
-  
+
   if (pageIndex >= pdfDoc.getPageCount()) {
     console.warn('⚠️ Page index out of bounds:', pageIndex);
     return;
   }
-  
+
   const page = pdfDoc.getPage(pageIndex);
   const hexColor = color.startsWith('#') ? color : `#${color}`;
   const rgbValues = hexToRgb(hexColor);
-  
+
   console.log(`📦 Adding rectangle at (${x}, ${y}) size ${width}x${height}`);
-  
+
   page.drawRectangle({
     x: parseFloat(x),
     y: parseFloat(y),
@@ -1439,14 +1585,14 @@ async function removePageFromPDF(pdfDoc, edit) {
   pdfDoc.removePage(parseInt(pageIndex));
 }
 
-function hexToRgb(hex) {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  return result ? {
-    r: parseInt(result[1], 16) / 255,
-    g: parseInt(result[2], 16) / 255,
-    b: parseInt(result[3], 16) / 255,
-  } : { r: 0, g: 0, b: 0 };
-}
+// function hexToRgb(hex) {
+//   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+//   return result ? {
+//     r: parseInt(result[1], 16) / 255,
+//     g: parseInt(result[2], 16) / 255,
+//     b: parseInt(result[3], 16) / 255,
+//   } : { r: 0, g: 0, b: 0 };
+// }
 
 // ✅ FIXED: rgb helper for pdf-lib
 // function rgb(r, g, b) {
@@ -1474,10 +1620,10 @@ app.post('/api/add-watermark', upload.single('pdfFile'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No PDF file uploaded.' });
     }
-    
+
     uploadedPath = req.file.path; // Capture path for cleanup later
     const { watermarks } = JSON.parse(req.body.watermarkData);
-    
+
     // FIX 1: Read file from disk, NOT buffer (since you use dest: 'uploads/')
     const pdfBytes = await fs.readFile(uploadedPath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -1485,31 +1631,31 @@ app.post('/api/add-watermark', upload.single('pdfFile'), async (req, res) => {
 
     for (const watermark of watermarks) {
       if (watermark.type === 'text') {
-        const { 
-          text, 
-          fontSize, 
-          textColor, 
-          isBold, 
-          isItalic, 
-          rotation, 
-          opacity, 
-          positionKey, 
-          isMosaic, 
+        const {
+          text,
+          fontSize,
+          textColor,
+          isBold,
+          isItalic,
+          rotation,
+          opacity,
+          positionKey,
+          isMosaic,
           fontFamily
         } = watermark;
 
         // 1. Get the font object
         const font = await getFontAndStyle(pdfDoc, fontFamily, isBold, isItalic);
-        
+
         // 2. Convert Color
         // Ensure we handle the color safely
         let pdfColor;
         try {
-            const { r, g, b } = Color(textColor).object();
-            pdfColor = rgb(r / 255, g / 255, b / 255);
+          const { r, g, b } = Color(textColor).object();
+          pdfColor = rgb(r / 255, g / 255, b / 255);
         } catch (e) {
-            console.warn("Invalid color, defaulting to black");
-            pdfColor = rgb(0, 0, 0);
+          console.warn("Invalid color, defaulting to black");
+          pdfColor = rgb(0, 0, 0);
         }
 
         // 3. Pre-calculate text size
@@ -1524,114 +1670,114 @@ app.post('/api/add-watermark', upload.single('pdfFile'), async (req, res) => {
           opacity: opacity,
           rotate: degrees(rotation), // ✅ CORRECT: Uses the degrees helper
         };
-        
+
         for (const page of pages) {
-            const { width: pageWidth, height: pageHeight } = page.getSize();
-            
-            // Draw Helper
-            const drawText = (x, y) => {
-                // FIX 2: Draw directly on page (removes broken 'layer' logic)
-                page.drawText(text, { 
-                    ...drawOptions, 
-                    x: x, 
-                    y: y 
-                });
-            };
+          const { width: pageWidth, height: pageHeight } = page.getSize();
 
-            if (isMosaic) {
-                // Tiling (Mosaic) Logic
-                const gap = 300; // Increased gap for better spacing
-                const horizontalRepeats = Math.ceil(pageWidth / gap) * 2;
-                const verticalRepeats = Math.ceil(pageHeight / gap) * 2;
-                
-                const startX = -pageWidth;
-                const startY = -pageHeight;
-
-                for (let i = 0; i < horizontalRepeats; i++) {
-                    for (let j = 0; j < verticalRepeats; j++) {
-                        const tileX = startX + i * gap;
-                        const tileY = startY + j * gap;
-                        drawText(tileX, tileY);
-                    }
-                }
-            } else {
-                // 9-Point Positioning Logic
-                const { x, y } = calculatePosition(pageWidth, pageHeight, textWidth, textHeight, positionKey);
-                drawText(x, y);
-            }
-        }
-      }
-      
-      else if (watermark.type === 'image') {
-    const { 
-        imageData, 
-        width, 
-        height, 
-        opacity, 
-        rotation, 
-        positionKey, 
-        isMosaic 
-    } = watermark;
-
-    // 1. Decode Base64 Image
-    // The client sends "data:image/png;base64,..." - we need the part after the comma
-    if (!imageData) continue;
-    const base64Data = imageData.split(',')[1]; 
-    const imageBytes = Buffer.from(base64Data, 'base64');
-
-    let image;
-    try {
-        // Try embedding as PNG first
-        image = await pdfDoc.embedPng(imageBytes);
-    } catch (e) {
-        // If PNG fails, try JPG
-        image = await pdfDoc.embedJpg(imageBytes);
-    }
-
-    // 2. Define Image Drawing Options
-    const drawOptions = {
-        width: Number(width),
-        height: Number(height),
-        opacity: Number(opacity),
-        rotate: degrees(rotation), // Uses the same 'degrees' helper
-    };
-
-    for (const page of pages) {
-        const { width: pageWidth, height: pageHeight } = page.getSize();
-
-        // Helper to draw the image at specific coordinates
-        const drawImg = (x, y) => {
-            page.drawImage(image, {
-                ...drawOptions,
-                x: x,
-                y: y
+          // Draw Helper
+          const drawText = (x, y) => {
+            // FIX 2: Draw directly on page (removes broken 'layer' logic)
+            page.drawText(text, {
+              ...drawOptions,
+              x: x,
+              y: y
             });
-        };
+          };
 
-        if (isMosaic) {
-            // Tiling (Mosaic) Logic for Images
-            const gap = 300; 
+          if (isMosaic) {
+            // Tiling (Mosaic) Logic
+            const gap = 300; // Increased gap for better spacing
             const horizontalRepeats = Math.ceil(pageWidth / gap) * 2;
             const verticalRepeats = Math.ceil(pageHeight / gap) * 2;
-            
+
             const startX = -pageWidth;
             const startY = -pageHeight;
 
             for (let i = 0; i < horizontalRepeats; i++) {
-                for (let j = 0; j < verticalRepeats; j++) {
-                    const tileX = startX + i * gap;
-                    const tileY = startY + j * gap;
-                    drawImg(tileX, tileY);
-                }
+              for (let j = 0; j < verticalRepeats; j++) {
+                const tileX = startX + i * gap;
+                const tileY = startY + j * gap;
+                drawText(tileX, tileY);
+              }
             }
-        } else {
+          } else {
+            // 9-Point Positioning Logic
+            const { x, y } = calculatePosition(pageWidth, pageHeight, textWidth, textHeight, positionKey);
+            drawText(x, y);
+          }
+        }
+      }
+
+      else if (watermark.type === 'image') {
+        const {
+          imageData,
+          width,
+          height,
+          opacity,
+          rotation,
+          positionKey,
+          isMosaic
+        } = watermark;
+
+        // 1. Decode Base64 Image
+        // The client sends "data:image/png;base64,..." - we need the part after the comma
+        if (!imageData) continue;
+        const base64Data = imageData.split(',')[1];
+        const imageBytes = Buffer.from(base64Data, 'base64');
+
+        let image;
+        try {
+          // Try embedding as PNG first
+          image = await pdfDoc.embedPng(imageBytes);
+        } catch (e) {
+          // If PNG fails, try JPG
+          image = await pdfDoc.embedJpg(imageBytes);
+        }
+
+        // 2. Define Image Drawing Options
+        const drawOptions = {
+          width: Number(width),
+          height: Number(height),
+          opacity: Number(opacity),
+          rotate: degrees(rotation), // Uses the same 'degrees' helper
+        };
+
+        for (const page of pages) {
+          const { width: pageWidth, height: pageHeight } = page.getSize();
+
+          // Helper to draw the image at specific coordinates
+          const drawImg = (x, y) => {
+            page.drawImage(image, {
+              ...drawOptions,
+              x: x,
+              y: y
+            });
+          };
+
+          if (isMosaic) {
+            // Tiling (Mosaic) Logic for Images
+            const gap = 300;
+            const horizontalRepeats = Math.ceil(pageWidth / gap) * 2;
+            const verticalRepeats = Math.ceil(pageHeight / gap) * 2;
+
+            const startX = -pageWidth;
+            const startY = -pageHeight;
+
+            for (let i = 0; i < horizontalRepeats; i++) {
+              for (let j = 0; j < verticalRepeats; j++) {
+                const tileX = startX + i * gap;
+                const tileY = startY + j * gap;
+                drawImg(tileX, tileY);
+              }
+            }
+          } else {
             // 9-Point Positioning Logic
             // We reuse calculatePosition by passing image width/height as text width/height
             const { x, y } = calculatePosition(pageWidth, pageHeight, Number(width), Number(height), positionKey);
             drawImg(x, y);
+          }
         }
-    }
-}
+      }
     }
 
     // Finalize the PDF
@@ -1643,11 +1789,11 @@ app.post('/api/add-watermark', upload.single('pdfFile'), async (req, res) => {
     res.send(Buffer.from(resultPdfBytes));
 
     // Cleanup uploaded file
-    await fs.unlink(uploadedPath).catch(() => {});
+    await fs.unlink(uploadedPath).catch(() => { });
 
   } catch (error) {
     console.error('PDF Watermark Processing Error:', error);
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {}); // Cleanup on error
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { }); // Cleanup on error
     res.status(500).json({ error: 'Failed to process PDF: ' + error.message });
   }
 });
@@ -1682,7 +1828,7 @@ app.post('/api/rotate-pdf', upload.single('pdfFile'), async (req, res) => {
     const pdfBytes = await fs.readFile(uploadedPath);
     const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
     const pages = pdfDoc.getPages();
-    
+
     console.log(`📄 PDF Loaded. Total pages: ${pages.length}`);
 
     // 3. Apply Rotation (Safe Method)
@@ -1698,7 +1844,7 @@ app.post('/api/rotate-pdf', upload.single('pdfFile'), async (req, res) => {
       }
 
       const newRotation = currentRotation + angle;
-      
+
       // Use the 'degrees' helper imported at the top of server.js
       page.setRotation(degrees(newRotation));
     });
@@ -1706,7 +1852,7 @@ app.post('/api/rotate-pdf', upload.single('pdfFile'), async (req, res) => {
     // 4. Save and Send
     const rotatedPdfBytes = await pdfDoc.save();
     const outputName = `rotated_${angle}_${req.file.originalname}`;
-    
+
     console.log('✅ PDF Rotated successfully. Sending back...');
 
     // Log operation
@@ -1721,22 +1867,22 @@ app.post('/api/rotate-pdf', upload.single('pdfFile'), async (req, res) => {
     res.send(Buffer.from(rotatedPdfBytes));
 
     // Cleanup
-    await fs.unlink(uploadedPath).catch(() => {});
+    await fs.unlink(uploadedPath).catch(() => { });
 
   } catch (err) {
     console.error('❌ CRITICAL ROTATE ERROR:', err);
-    
+
     // Attempt to log failure to DB
     try {
-        await Operation.create({
+      await Operation.create({
         operation: 'rotate-pdf',
         filename: req.file?.originalname || 'unknown',
         status: 'failed'
-        });
-    } catch(dbErr) { console.error("DB Log failed", dbErr); }
+      });
+    } catch (dbErr) { console.error("DB Log failed", dbErr); }
 
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
-    
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
+
     // Send detailed error to frontend so you can see it in the Alert
     res.status(500).json({ error: 'Server Error: ' + err.message });
   }
@@ -1784,10 +1930,10 @@ app.post('/api/unlock-pdf', upload.single('pdfFile'), async (req, res) => {
         if (error) {
           // Check for specific "invalid password" message in stderr
           if (stderr && stderr.includes('invalid password')) {
-             reject(new Error("INCORRECT_PASSWORD"));
+            reject(new Error("INCORRECT_PASSWORD"));
           } else {
-             console.error("QPDF Unlock Error:", stderr);
-             reject(new Error("Failed to unlock PDF."));
+            console.error("QPDF Unlock Error:", stderr);
+            reject(new Error("Failed to unlock PDF."));
           }
         } else {
           resolve(stdout);
@@ -1800,26 +1946,26 @@ app.post('/api/unlock-pdf', upload.single('pdfFile'), async (req, res) => {
     // 5. Send the Unlocked File
     res.download(outputPath, `unlocked_${req.file.originalname}`, async (err) => {
       if (err) console.error("Download Error:", err);
-      
+
       // Cleanup files
-      await fs.unlink(inputPath).catch(() => {});
-      await fs.unlink(outputPath).catch(() => {});
+      await fs.unlink(inputPath).catch(() => { });
+      await fs.unlink(outputPath).catch(() => { });
     });
 
   } catch (err) {
     // specific error handling for wrong password
     if (err.message === "INCORRECT_PASSWORD") {
-        console.warn('⚠️ User provided incorrect password');
-        // Clean up input immediately
-        if (inputPath) await fs.unlink(inputPath).catch(() => {});
-        return res.status(401).json({ error: "Incorrect password" });
+      console.warn('⚠️ User provided incorrect password');
+      // Clean up input immediately
+      if (inputPath) await fs.unlink(inputPath).catch(() => { });
+      return res.status(401).json({ error: "Incorrect password" });
     }
 
     console.error('❌ Unlock PDF Failed:', err.message);
-    
+
     // Cleanup input
-    if (inputPath) await fs.unlink(inputPath).catch(() => {});
-    
+    if (inputPath) await fs.unlink(inputPath).catch(() => { });
+
     res.status(500).json({ error: err.message });
   }
 });
@@ -1856,63 +2002,63 @@ app.post('/api/protect-pdf', upload.single('pdfFile'), async (req, res) => {
 
     // Check if QPDF exists before running (helps debugging)
     try {
-        await fs.access(qpdfExe);
+      await fs.access(qpdfExe);
     } catch (e) {
-        throw new Error(`QPDF executable not found at: ${qpdfExe}. Please install QPDF or check the path.`);
+      throw new Error(`QPDF executable not found at: ${qpdfExe}. Please install QPDF or check the path.`);
     }
 
     // 3. Arguments for QPDF
     // Syntax: qpdf --encrypt user-password owner-password key-len -- input output
     const args = [
-        '--encrypt',
-        password,       // User password (to open)
-        password,       // Owner password (to edit)
-        '256',          // 256-bit encryption
-        '--print=full', // Allow printing
-        '--modify=none',// Block modifications
-        '--',           // End of flags
-        inputPath,      // Input file
-        outputPath      // Output file
+      '--encrypt',
+      password,       // User password (to open)
+      password,       // Owner password (to edit)
+      '256',          // 256-bit encryption
+      '--print=full', // Allow printing
+      '--modify=none',// Block modifications
+      '--',           // End of flags
+      inputPath,      // Input file
+      outputPath      // Output file
     ];
 
     console.log(`Executing QPDF...`);
 
     // 4. Run QPDF using execFile (Handles spaces in paths automatically)
     await new Promise((resolve, reject) => {
-        execFile(qpdfExe, args, (error, stdout, stderr) => {
-            if (error) {
-                console.error("QPDF Error:", stderr);
-                reject(new Error("QPDF failed to encrypt the file."));
-            } else {
-                resolve(stdout);
-            }
-        });
+      execFile(qpdfExe, args, (error, stdout, stderr) => {
+        if (error) {
+          console.error("QPDF Error:", stderr);
+          reject(new Error("QPDF failed to encrypt the file."));
+        } else {
+          resolve(stdout);
+        }
+      });
     });
 
     console.log("✅ QPDF Encrypted successfully!");
 
     // 5. Send the Protected File
     res.download(outputPath, `protected_${req.file.originalname}`, async (err) => {
-        if (err) console.error("Download Error:", err);
-        
-        // Cleanup files
-        await fs.unlink(inputPath).catch(() => {});
-        await fs.unlink(outputPath).catch(() => {});
+      if (err) console.error("Download Error:", err);
+
+      // Cleanup files
+      await fs.unlink(inputPath).catch(() => { });
+      await fs.unlink(outputPath).catch(() => { });
     });
 
   } catch (err) {
     console.error('❌ Protect PDF Failed:', err.message);
-    
+
     // Log Failure
     await Operation.create({
       operation: 'protect-pdf',
       filename: req.file?.originalname || 'unknown',
       status: 'failed'
-    }).catch(() => {});
+    }).catch(() => { });
 
     // Cleanup input if it exists
-    if (inputPath) await fs.unlink(inputPath).catch(() => {});
-    
+    if (inputPath) await fs.unlink(inputPath).catch(() => { });
+
     // Send Error
     res.status(500).json({ error: err.message });
   }
@@ -1937,13 +2083,13 @@ app.post('/api/organize-pdf', upload.single('pdfFile'), async (req, res) => {
     // Note: The order of the array determines the new page sequence.
     let pageInstructions;
     try {
-        pageInstructions = JSON.parse(req.body.pageOrder);
+      pageInstructions = JSON.parse(req.body.pageOrder);
     } catch (e) {
-        return res.status(400).json({ error: 'Invalid JSON format for pageOrder' });
+      return res.status(400).json({ error: 'Invalid JSON format for pageOrder' });
     }
 
     if (!Array.isArray(pageInstructions) || pageInstructions.length === 0) {
-        return res.status(400).json({ error: 'Page order cannot be empty' });
+      return res.status(400).json({ error: 'Page order cannot be empty' });
     }
 
     // 2. Load Original PDF
@@ -1957,11 +2103,11 @@ app.post('/api/organize-pdf', upload.single('pdfFile'), async (req, res) => {
     // 4. Process Instructions
     // We collect all needed indices first to batch copy (efficient)
     const indicesToCopy = pageInstructions.map(p => p.originalIndex);
-    
+
     // Validate indices
     const validIndices = indicesToCopy.filter(i => i >= 0 && i < totalPages);
     if (validIndices.length !== indicesToCopy.length) {
-        throw new Error("Invalid page index detected in request.");
+      throw new Error("Invalid page index detected in request.");
     }
 
     // Copy pages to the new document
@@ -1969,16 +2115,16 @@ app.post('/api/organize-pdf', upload.single('pdfFile'), async (req, res) => {
 
     // Add pages to new PDF and apply rotation if needed
     pageInstructions.forEach((instr, i) => {
-        const page = copiedPages[i];
-        
-        // Apply extra rotation if requested (on top of existing rotation)
-        // 'rotate' in instruction is relative (e.g., 90, 180, -90)
-        if (instr.rotate && instr.rotate !== 0) {
-            const currentRotation = page.getRotation().angle;
-            page.setRotation(degrees(currentRotation + instr.rotate));
-        }
+      const page = copiedPages[i];
 
-        newPdf.addPage(page);
+      // Apply extra rotation if requested (on top of existing rotation)
+      // 'rotate' in instruction is relative (e.g., 90, 180, -90)
+      if (instr.rotate && instr.rotate !== 0) {
+        const currentRotation = page.getRotation().angle;
+        page.setRotation(degrees(currentRotation + instr.rotate));
+      }
+
+      newPdf.addPage(page);
     });
 
     // 5. Save and Send
@@ -1997,7 +2143,7 @@ app.post('/api/organize-pdf', upload.single('pdfFile'), async (req, res) => {
     });
 
     // Cleanup
-    await fs.unlink(uploadedPath).catch(() => {});
+    await fs.unlink(uploadedPath).catch(() => { });
 
   } catch (err) {
     console.error('❌ Organize PDF Error:', err);
@@ -2005,9 +2151,9 @@ app.post('/api/organize-pdf', upload.single('pdfFile'), async (req, res) => {
       operation: 'organize-pdf',
       filename: req.file?.originalname || 'unknown',
       status: 'failed'
-    }).catch(() => {});
+    }).catch(() => { });
 
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
     res.status(500).json({ error: 'Failed to organize PDF: ' + err.message });
   }
 });
@@ -2027,7 +2173,7 @@ app.post('/api/get-pdf-thumbnails', upload.single('pdfFile'), async (req, res) =
 
     // Define output prefix (e.g. "uploads/temp/page")
     const outPrefix = path.join(tempDir, 'page');
-    
+
     // 1. Construct the command
     // Syntax: pdftoppm -jpeg -scale-to 200 "InputFile" "OutputPrefix"
     // We wrap paths in quotes to handle spaces safely
@@ -2041,15 +2187,15 @@ app.post('/api/get-pdf-thumbnails', upload.single('pdfFile'), async (req, res) =
     const execPromise = util.promisify(exec);
 
     try {
-        await execPromise(cmd);
+      await execPromise(cmd);
     } catch (execError) {
-        console.error("System Command Failed:", execError.message);
-        throw new Error("Failed to execute pdftoppm. Ensure Poppler is in System PATH.");
+      console.error("System Command Failed:", execError.message);
+      throw new Error("Failed to execute pdftoppm. Ensure Poppler is in System PATH.");
     }
 
     // 3. Read the generated images
     let imageFiles = await fs.readdir(tempDir);
-    
+
     // Sort files naturally (page-1, page-2, page-10...)
     imageFiles = imageFiles
       .filter(f => f.match(/\.(jpg|jpeg|png)$/i))
@@ -2063,26 +2209,26 @@ app.post('/api/get-pdf-thumbnails', upload.single('pdfFile'), async (req, res) =
 
     // 4. Convert images to Base64 to send to frontend
     const thumbnails = await Promise.all(imageFiles.map(async (file, index) => {
-        const filePath = path.join(tempDir, file);
-        const buffer = await fs.readFile(filePath);
-        return {
-            id: `page-${index}`,
-            originalIndex: index, // Maintain exact index
-            src: `data:image/jpeg;base64,${buffer.toString('base64')}`,
-            rotation: 0
-        };
+      const filePath = path.join(tempDir, file);
+      const buffer = await fs.readFile(filePath);
+      return {
+        id: `page-${index}`,
+        originalIndex: index, // Maintain exact index
+        src: `data:image/jpeg;base64,${buffer.toString('base64')}`,
+        rotation: 0
+      };
     }));
 
     res.json({ thumbnails });
 
     // 5. Cleanup
-    await fs.unlink(uploadedPath).catch(() => {});
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await fs.unlink(uploadedPath).catch(() => { });
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => { });
 
   } catch (err) {
     console.error('❌ Thumbnail Error:', err);
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => { });
     res.status(500).json({ error: 'Failed to generate previews: ' + err.message });
   }
 });
@@ -2097,10 +2243,10 @@ app.post('/api/add-page-numbers', upload.single('pdfFile'), async (req, res) => 
     console.log('🔢 Add Page Numbers request received');
 
     if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
-    
+
     uploadedPath = req.file.path;
     const settings = JSON.parse(req.body.settings);
-    
+
     // Settings defaults
     const {
       position = 'bottom-center', // top-left, top-center, top-right, bottom-left...
@@ -2180,12 +2326,12 @@ app.post('/api/add-page-numbers', upload.single('pdfFile'), async (req, res) => 
     res.send(Buffer.from(resultBytes));
 
     // Cleanup
-    await fs.unlink(uploadedPath).catch(() => {});
+    await fs.unlink(uploadedPath).catch(() => { });
     await Operation.create({ operation: 'page-numbers', filename: req.file.originalname, status: 'success' });
 
   } catch (err) {
     console.error('❌ Page Numbers Error:', err);
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
     res.status(500).json({ error: 'Failed to add page numbers: ' + err.message });
   }
 });
@@ -2203,7 +2349,7 @@ app.post('/api/crop-pdf', upload.single('pdfFile'), async (req, res) => {
     if (!req.body.cropData) return res.status(400).json({ error: 'Crop data is required' });
 
     uploadedPath = req.file.path;
-    
+
     // Parse frontend data
     // crop: { x, y, width, height, unit: '%' } - values are percentages (0-100)
     // pageSelection: 'all' or 'current'
@@ -2211,7 +2357,7 @@ app.post('/api/crop-pdf', upload.single('pdfFile'), async (req, res) => {
     const { crop, pageSelection, currentPageIndex } = JSON.parse(req.body.cropData);
 
     if (!crop || crop.width === 0 || crop.height === 0) {
-        return res.status(400).json({ error: 'Please select an area to crop.' });
+      return res.status(400).json({ error: 'Please select an area to crop.' });
     }
 
     // 2. Load PDF
@@ -2222,36 +2368,36 @@ app.post('/api/crop-pdf', upload.single('pdfFile'), async (req, res) => {
     // 3. Determine pages to crop
     let pagesToProcess = [];
     if (pageSelection === 'all') {
-        pagesToProcess = pages;
+      pagesToProcess = pages;
     } else if (pageSelection === 'current' && currentPageIndex >= 0 && currentPageIndex < pages.length) {
-        pagesToProcess = [pages[currentPageIndex]];
+      pagesToProcess = [pages[currentPageIndex]];
     } else {
-        throw new Error('Invalid page selection');
+      throw new Error('Invalid page selection');
     }
 
     console.log(`Applying crop to ${pagesToProcess.length} page(s)...`);
 
     // 4. Apply crop to each selected page
     for (const page of pagesToProcess) {
-        const { width, height } = page.getSize();
+      const { width, height } = page.getSize();
 
-        // Convert percentage values from frontend to PDF points
-        // PDF origin (0,0) is bottom-left. Frontend origin is top-left.
-        
-        // Calculate dimensions
-        const cropWidth = (crop.width / 100) * width;
-        const cropHeight = (crop.height / 100) * height;
+      // Convert percentage values from frontend to PDF points
+      // PDF origin (0,0) is bottom-left. Frontend origin is top-left.
 
-        // Calculate X (distance from left is same for both)
-        const cropX = (crop.x / 100) * width;
+      // Calculate dimensions
+      const cropWidth = (crop.width / 100) * width;
+      const cropHeight = (crop.height / 100) * height;
 
-        // Calculate Y (distance from bottom)
-        // PDF Y = Page Height - (Top Margin from UI) - (Crop Height)
-        const cropY = height - ((crop.y / 100) * height) - cropHeight;
+      // Calculate X (distance from left is same for both)
+      const cropX = (crop.x / 100) * width;
 
-        // Set both CropBox (visible area) and MediaBox (physical page size)
-        page.setCropBox(cropX, cropY, cropWidth, cropHeight);
-        page.setMediaBox(cropX, cropY, cropWidth, cropHeight);
+      // Calculate Y (distance from bottom)
+      // PDF Y = Page Height - (Top Margin from UI) - (Crop Height)
+      const cropY = height - ((crop.y / 100) * height) - cropHeight;
+
+      // Set both CropBox (visible area) and MediaBox (physical page size)
+      page.setCropBox(cropX, cropY, cropWidth, cropHeight);
+      page.setMediaBox(cropX, cropY, cropWidth, cropHeight);
     }
 
     // 5. Save and Send
@@ -2264,7 +2410,7 @@ app.post('/api/crop-pdf', upload.single('pdfFile'), async (req, res) => {
 
     // Log & Cleanup
     await Operation.create({ operation: 'crop-pdf', filename: req.file.originalname, status: 'success' });
-    await fs.unlink(uploadedPath).catch(() => {});
+    await fs.unlink(uploadedPath).catch(() => { });
 
   } catch (err) {
     console.error('❌ Crop PDF Error:', err);
@@ -2272,9 +2418,9 @@ app.post('/api/crop-pdf', upload.single('pdfFile'), async (req, res) => {
       operation: 'crop-pdf',
       filename: req.file?.originalname || 'unknown',
       status: 'failed'
-    }).catch(() => {});
+    }).catch(() => { });
 
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
     res.status(500).json({ error: 'Failed to crop PDF: ' + err.message });
   }
 });
@@ -2285,12 +2431,12 @@ app.post('/api/crop-pdf', upload.single('pdfFile'), async (req, res) => {
 // ------------------ COMPARE PDF (Fixed: Overlay & Semantic) ------------------
 app.post('/api/compare-pdf', upload.fields([{ name: 'file1' }, { name: 'file2' }]), async (req, res) => {
   const tempDir = path.join(__dirname, 'temp_compare', `cmp_${Date.now()}`);
-  
+
   try {
     console.log('🔍 Compare PDF request received');
 
     if (!req.files || !req.files['file1'] || !req.files['file2']) {
-        return res.status(400).json({ error: 'Please upload both PDF versions.' });
+      return res.status(400).json({ error: 'Please upload both PDF versions.' });
     }
 
     const mode = req.body.mode || 'overlay'; // 'overlay' or 'semantic'
@@ -2304,138 +2450,138 @@ app.post('/api/compare-pdf', upload.fields([{ name: 'file1' }, { name: 'file2' }
     // MODE 1: SEMANTIC TEXT COMPARISON (Text Diff)
     // ======================================================
     if (mode === 'semantic') {
-        console.log("📝 Running Semantic Text Comparison...");
-        
-        // Extract text
-        const buffer1 = await fs.readFile(file1Path);
-        const buffer2 = await fs.readFile(file2Path);
-        const data1 = await pdfParse(buffer1);
-        const data2 = await pdfParse(buffer2);
+      console.log("📝 Running Semantic Text Comparison...");
 
-        // Compute Text Diff
-        const diffs = diff.diffLines(data1.text, data2.text);
+      // Extract text
+      const buffer1 = await fs.readFile(file1Path);
+      const buffer2 = await fs.readFile(file2Path);
+      const data1 = await pdfParse(buffer1);
+      const data2 = await pdfParse(buffer2);
 
-        // Create Report Page
-        let page = resultPdf.addPage([595, 842]); // A4
-        const font = await resultPdf.embedFont(StandardFonts.Helvetica);
-        const fontBold = await resultPdf.embedFont(StandardFonts.HelveticaBold);
-        
-        let y = 800;
-        const margin = 50;
-        const fontSize = 10;
-        const lineHeight = 12;
+      // Compute Text Diff
+      const diffs = diff.diffLines(data1.text, data2.text);
 
-        // Title
-        page.drawText('Semantic Comparison Report', { x: margin, y, size: 18, font: fontBold, color: rgb(0, 0, 0) });
-        y -= 30;
+      // Create Report Page
+      let page = resultPdf.addPage([595, 842]); // A4
+      const font = await resultPdf.embedFont(StandardFonts.Helvetica);
+      const fontBold = await resultPdf.embedFont(StandardFonts.HelveticaBold);
 
-        for (const part of diffs) {
-            // Split into lines to handle wrapping/newlines
-            const lines = part.value.split('\n');
-            
-            // Set Color: Red for removed, Green for added, Gray for unchanged
-            let color = rgb(0.5, 0.5, 0.5); // Gray (unchanged)
-            let prefix = '  ';
-            if (part.added) {
-                color = rgb(0, 0.6, 0); // Green
-                prefix = '+ ';
-            }
-            if (part.removed) {
-                color = rgb(0.8, 0, 0); // Red
-                prefix = '- ';
-            }
+      let y = 800;
+      const margin = 50;
+      const fontSize = 10;
+      const lineHeight = 12;
 
-            // Draw Lines
-            for (const line of lines) {
-                if (line.trim().length === 0) continue; // Skip empty lines
-                
-                if (y < 50) { // New page if bottom reached
-                    page = resultPdf.addPage([595, 842]);
-                    y = 800;
-                }
+      // Title
+      page.drawText('Semantic Comparison Report', { x: margin, y, size: 18, font: fontBold, color: rgb(0, 0, 0) });
+      y -= 30;
 
-                // Truncate overly long lines to prevent crash
-                const safeLine = line.substring(0, 90); 
+      for (const part of diffs) {
+        // Split into lines to handle wrapping/newlines
+        const lines = part.value.split('\n');
 
-                page.drawText(prefix + safeLine, { x: margin, y, size: fontSize, font: font, color });
-                y -= lineHeight;
-            }
+        // Set Color: Red for removed, Green for added, Gray for unchanged
+        let color = rgb(0.5, 0.5, 0.5); // Gray (unchanged)
+        let prefix = '  ';
+        if (part.added) {
+          color = rgb(0, 0.6, 0); // Green
+          prefix = '+ ';
         }
-    } 
-    
+        if (part.removed) {
+          color = rgb(0.8, 0, 0); // Red
+          prefix = '- ';
+        }
+
+        // Draw Lines
+        for (const line of lines) {
+          if (line.trim().length === 0) continue; // Skip empty lines
+
+          if (y < 50) { // New page if bottom reached
+            page = resultPdf.addPage([595, 842]);
+            y = 800;
+          }
+
+          // Truncate overly long lines to prevent crash
+          const safeLine = line.substring(0, 90);
+
+          page.drawText(prefix + safeLine, { x: margin, y, size: fontSize, font: font, color });
+          y -= lineHeight;
+        }
+      }
+    }
+
     // ======================================================
     // MODE 2: VISUAL OVERLAY (Pixel Diff)
     // ======================================================
     else {
-        console.log("🖼️ Running Content Overlay Comparison...");
-        
-        await fs.mkdir(tempDir, { recursive: true });
-        const dir1 = path.join(tempDir, 'file1');
-        const dir2 = path.join(tempDir, 'file2');
-        await fs.mkdir(dir1);
-        await fs.mkdir(dir2);
+      console.log("🖼️ Running Content Overlay Comparison...");
 
-        // Convert PDFs to Images (pdftoppm)
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
+      await fs.mkdir(tempDir, { recursive: true });
+      const dir1 = path.join(tempDir, 'file1');
+      const dir2 = path.join(tempDir, 'file2');
+      await fs.mkdir(dir1);
+      await fs.mkdir(dir2);
 
-        const cmd1 = `pdftoppm -png -rx 100 -ry 100 "${file1Path}" "${path.join(dir1, 'page')}"`;
-        const cmd2 = `pdftoppm -png -rx 100 -ry 100 "${file2Path}" "${path.join(dir2, 'page')}"`;
-        await Promise.all([execPromise(cmd1), execPromise(cmd2)]);
+      // Convert PDFs to Images (pdftoppm)
+      const { exec } = require('child_process');
+      const util = require('util');
+      const execPromise = util.promisify(exec);
 
-        // Get Images
-        const getImages = async (dir) => {
-            const files = await fs.readdir(dir);
-            return files.filter(f => f.endsWith('.png')).sort((a, b) => {
-                const numA = parseInt(a.match(/-(\d+)\./)?.[1] || 0);
-                const numB = parseInt(b.match(/-(\d+)\./)?.[1] || 0);
-                return numA - numB;
-            });
-        };
+      const cmd1 = `pdftoppm -png -rx 100 -ry 100 "${file1Path}" "${path.join(dir1, 'page')}"`;
+      const cmd2 = `pdftoppm -png -rx 100 -ry 100 "${file2Path}" "${path.join(dir2, 'page')}"`;
+      await Promise.all([execPromise(cmd1), execPromise(cmd2)]);
 
-        const images1 = await getImages(dir1);
-        const images2 = await getImages(dir2);
-        const count = Math.min(images1.length, images2.length);
+      // Get Images
+      const getImages = async (dir) => {
+        const files = await fs.readdir(dir);
+        return files.filter(f => f.endsWith('.png')).sort((a, b) => {
+          const numA = parseInt(a.match(/-(\d+)\./)?.[1] || 0);
+          const numB = parseInt(b.match(/-(\d+)\./)?.[1] || 0);
+          return numA - numB;
+        });
+      };
 
-        for (let i = 0; i < count; i++) {
-            const img1Path = path.join(dir1, images1[i]);
-            const img2Path = path.join(dir2, images2[i]);
+      const images1 = await getImages(dir1);
+      const images2 = await getImages(dir2);
+      const count = Math.min(images1.length, images2.length);
 
-            const img1Data = PNG.sync.read(await fs.readFile(img1Path));
-            const img2Data = PNG.sync.read(await fs.readFile(img2Path));
-            
-            const { width, height } = img1Data;
-            const diffImage = new PNG({ width, height });
+      for (let i = 0; i < count; i++) {
+        const img1Path = path.join(dir1, images1[i]);
+        const img2Path = path.join(dir2, images2[i]);
 
-            // Pixelmatch
-            const numDiffPixels = pixelmatch(
-                img1Data.data, img2Data.data, diffImage.data, width, height, 
-                { threshold: 0.1, alpha: 0.9, diffColor: [255, 0, 0] }
-            );
+        const img1Data = PNG.sync.read(await fs.readFile(img1Path));
+        const img2Data = PNG.sync.read(await fs.readFile(img2Path));
 
-            // 1. Embed Original Page (Background)
-            // We use the original PNG as the base layer so the user sees the context
-            const baseImage = await resultPdf.embedPng(await fs.readFile(img1Path));
-            
-            // 2. Embed Diff Layer (Foreground)
-            const diffBuffer = PNG.sync.write(diffImage);
-            const overlayImage = await resultPdf.embedPng(diffBuffer);
+        const { width, height } = img1Data;
+        const diffImage = new PNG({ width, height });
 
-            // 3. Draw to PDF Page
-            const page = resultPdf.addPage([width, height]);
-            
-            // Draw Original (Faded slightly to make red pop?) 
-            // Standard drawing is fine, red overlay is strong.
-            page.drawImage(baseImage, { x: 0, y: 0, width, height, opacity: 0.3 }); // Faded background
-            page.drawImage(overlayImage, { x: 0, y: 0, width, height }); // Sharp diffs
-            
-            // Label
-            page.drawText(`Visual Diff - Page ${i+1}`, { x: 20, y: 20, size: 14, color: rgb(1, 0, 0) });
-        }
-        
-        // Cleanup temp images
-        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+        // Pixelmatch
+        const numDiffPixels = pixelmatch(
+          img1Data.data, img2Data.data, diffImage.data, width, height,
+          { threshold: 0.1, alpha: 0.9, diffColor: [255, 0, 0] }
+        );
+
+        // 1. Embed Original Page (Background)
+        // We use the original PNG as the base layer so the user sees the context
+        const baseImage = await resultPdf.embedPng(await fs.readFile(img1Path));
+
+        // 2. Embed Diff Layer (Foreground)
+        const diffBuffer = PNG.sync.write(diffImage);
+        const overlayImage = await resultPdf.embedPng(diffBuffer);
+
+        // 3. Draw to PDF Page
+        const page = resultPdf.addPage([width, height]);
+
+        // Draw Original (Faded slightly to make red pop?) 
+        // Standard drawing is fine, red overlay is strong.
+        page.drawImage(baseImage, { x: 0, y: 0, width, height, opacity: 0.3 }); // Faded background
+        page.drawImage(overlayImage, { x: 0, y: 0, width, height }); // Sharp diffs
+
+        // Label
+        page.drawText(`Visual Diff - Page ${i + 1}`, { x: 20, y: 20, size: 14, color: rgb(1, 0, 0) });
+      }
+
+      // Cleanup temp images
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => { });
     }
 
     // Common: Save & Send
@@ -2447,12 +2593,12 @@ app.post('/api/compare-pdf', upload.fields([{ name: 'file1' }, { name: 'file2' }
     res.send(Buffer.from(outputBytes));
 
     // Cleanup inputs
-    await fs.unlink(file1Path).catch(() => {});
-    await fs.unlink(file2Path).catch(() => {});
+    await fs.unlink(file1Path).catch(() => { });
+    await fs.unlink(file2Path).catch(() => { });
 
   } catch (err) {
     console.error('❌ Comparison Error:', err);
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => { });
     res.status(500).json({ error: 'Failed to compare: ' + err.message });
   }
 });
