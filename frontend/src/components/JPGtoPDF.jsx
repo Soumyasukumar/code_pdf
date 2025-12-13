@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 
@@ -101,6 +101,11 @@ function JPGtoPDF() {
   };
 
   const fileNames = selectedFiles ? Array.from(selectedFiles).map((f) => f.name) : [];
+
+    // SET PAGE TITLE HERE
+    useEffect(() => {
+      document.title = "PDFPro | JPG TO PDF";
+    }, []);
 
   return (
     <>

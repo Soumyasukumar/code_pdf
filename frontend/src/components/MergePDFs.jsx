@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import axios from 'axios';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
@@ -92,6 +92,11 @@ function MergePDFs() {
   };
 
   const fileNames = files.length > 0 ? files.map((f) => f.name) : null;
+
+    // SET PAGE TITLE HERE
+    useEffect(() => {
+      document.title = "PDFPro | Merge PDF";
+    }, []);
 
   return (
     <>

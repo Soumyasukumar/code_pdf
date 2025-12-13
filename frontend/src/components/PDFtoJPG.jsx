@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 
@@ -94,6 +94,11 @@ function PDFtoJPG() {
       setErrorMessage(`Failed to convert: ${error.message}`);
     }
   };
+
+    // SET PAGE TITLE HERE
+    useEffect(() => {
+      document.title = "PDFPro | PDF TO JPG";
+    }, []);
 
   return (
     <>

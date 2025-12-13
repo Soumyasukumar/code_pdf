@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import axios from 'axios';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
@@ -90,6 +90,11 @@ function PDFtoWord() {
       setIsLoading(false);
     }
   };
+
+    // SET PAGE TITLE HERE
+    useEffect(() => {
+      document.title = "PDFPro | PDF TO WORD";
+    }, []);
 
   return (
     <>

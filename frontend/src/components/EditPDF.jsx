@@ -1,5 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 
+  // SET PAGE TITLE HERE
+  useEffect(() => {
+    document.title = "PDFPro | Edit PDF";
+  }, []);
+
 const EditPDF = () => {
   // Core states
   const [file, setFile] = useState(null);

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef,useEffect } from 'react';
 import axios from 'axios';
 import ReactCrop from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
@@ -87,6 +87,11 @@ function CropPdf() {
       setProcessing(false);
     }
   };
+
+    // SET PAGE TITLE HERE
+    useEffect(() => {
+      document.title = "PDFPro | Crop PDF";
+    }, []);
 
   const nextPage = () => setCurrentPage((p) => Math.min(p + 1, thumbnails.length - 1));
   const prevPage = () => setCurrentPage((p) => Math.max(p - 1, 0));

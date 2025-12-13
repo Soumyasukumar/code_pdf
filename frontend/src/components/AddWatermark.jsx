@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef,useEffect } from 'react';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 
@@ -200,6 +200,10 @@ function AddWatermark() {
       </div>
     );
   };
+    // SET PAGE TITLE HERE
+    useEffect(() => {
+      document.title = "PDFPro | Add Watermark";
+    }, []);
 
   return (
     <>

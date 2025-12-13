@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import axios from 'axios';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
@@ -90,6 +90,12 @@ function PageNumberPdf() {
       'bottom-center': 'bottom-2 left-1/2 transform -translate-x-1/2',
       'bottom-right': 'bottom-2 right-2',
     };
+
+      // SET PAGE TITLE HERE
+      useEffect(() => {
+        document.title = "PDFPro | Insert Page Number to PDF";
+      }, []);
+
     return (
       <div
         className={`absolute w-3 h-3 bg-red-500 rounded-full shadow-sm z-10 ${posMap[pos] || 'hidden'}`}

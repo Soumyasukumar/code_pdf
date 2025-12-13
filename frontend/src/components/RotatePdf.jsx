@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import axios from 'axios';
 // Added ArrowDown for the upside-down icon
 import { FileText, RotateCw, RotateCcw, ArrowDown, Download, X, Loader } from 'lucide-react';
@@ -85,6 +85,11 @@ const RotatePdf = () => {
     setError('');
     setSuccess(false);
   };
+
+   // SET PAGE TITLE HERE
+  useEffect(() => {
+    document.title = "PDFPro | Rotate PDF";
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8 font-sans">

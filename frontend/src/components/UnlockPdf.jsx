@@ -1,5 +1,5 @@
 // src/components/UnlockPdf.jsx
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import axios from 'axios';
 import Navbar from './Navbar';
 import Footer from './Footer';
@@ -100,6 +100,11 @@ const UnlockPdf = () => {
       setIsLoading(false);
     }
   };
+
+   // SET PAGE TITLE HERE
+  useEffect(() => {
+    document.title = "PDFPro | Unlock PDF";
+  }, []);
 
   return (
     <>

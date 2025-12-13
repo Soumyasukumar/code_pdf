@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import axios from 'axios';
 import {
   DndContext,
@@ -36,6 +36,11 @@ const SortableItem = ({ id, page, index, onRemove, onRotate }) => {
     opacity: isDragging ? 0.5 : 1,
     touchAction: 'none',
   };
+
+    // SET PAGE TITLE HERE
+    useEffect(() => {
+      document.title = "PDFPro | Organize PDF";
+    }, []);
 
   return (
     <div
