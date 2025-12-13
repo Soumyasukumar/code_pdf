@@ -25,6 +25,7 @@
     "exceljs": "^4.4.0",
     "express": "^5.1.0",
     "html-to-pdfmake": "^2.5.32",
+    "jimp": "^1.6.0",
     "jsdom": "^27.2.0",
     "lucide-react": "^0.555.0",
     "mammoth": "^1.11.0",
