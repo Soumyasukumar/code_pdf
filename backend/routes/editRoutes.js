@@ -151,7 +151,7 @@ router.post('/rotate-pdf', upload.single('pdfFile'), async (req, res) => {
 
 
 
-// ------------------ CROP PDF ------------------
+// ------------------ CROP PDF (With Custom Page Selection) ------------------
 router.post('/crop-pdf', upload.single('pdfFile'), async (req, res) => {
   let uploadedPath = null;
 
@@ -165,76 +165,116 @@ router.post('/crop-pdf', upload.single('pdfFile'), async (req, res) => {
     uploadedPath = req.file.path;
 
     // Parse frontend data
-    // crop: { x, y, width, height, unit: '%' } - values are percentages (0-100)
-    // pageSelection: 'all' or 'current'
-    // currentPageIndex: number (0-based)
-    const { crop, pageSelection, currentPageIndex } = JSON.parse(req.body.cropData);
+    // New field: customPageRange (string like "1,3,5-7")
+    const { crop, pageSelection, currentPageIndex, customPageRange } = JSON.parse(req.body.cropData);
 
     if (!crop || crop.width === 0 || crop.height === 0) {
       return res.status(400).json({ error: 'Please select an area to crop.' });
     }
 
-    // 2. Load PDF
+    // 2. Load the Original PDF
     const pdfBytes = await fs.readFile(uploadedPath);
-    const pdfDoc = await PDFDocument.load(pdfBytes);
-    const pages = pdfDoc.getPages();
+    const srcDoc = await PDFDocument.load(pdfBytes);
+    const srcPages = srcDoc.getPages();
+    const totalPages = srcPages.length;
 
-    // 3. Determine pages to crop
-    let pagesToProcess = [];
+    // 3. Create a NEW PDF Document
+    const newDoc = await PDFDocument.create();
+
+    // 4. Determine which pages to process (Logic Update)
+    let pageIndicesToProcess = [];
+
     if (pageSelection === 'all') {
-      pagesToProcess = pages;
-    } else if (pageSelection === 'current' && currentPageIndex >= 0 && currentPageIndex < pages.length) {
-      pagesToProcess = [pages[currentPageIndex]];
-    } else {
-      throw new Error('Invalid page selection');
+      // Add all pages (0 to total-1)
+      pageIndicesToProcess = srcPages.map((_, i) => i);
+    } 
+    else if (pageSelection === 'current') {
+      // Add only current page
+      if (currentPageIndex >= 0 && currentPageIndex < totalPages) {
+        pageIndicesToProcess = [currentPageIndex];
+      }
+    } 
+    else if (pageSelection === 'custom') {
+      // --- CUSTOM RANGE PARSING LOGIC ---
+      // Expected format: "1, 3, 5-7"
+      const ranges = customPageRange.split(',');
+      const selectedIndices = new Set(); // Use Set to avoid duplicates
+
+      ranges.forEach(range => {
+        const part = range.trim();
+        if (part.includes('-')) {
+          // Handle range "5-7"
+          const [start, end] = part.split('-').map(num => parseInt(num));
+          if (!isNaN(start) && !isNaN(end)) {
+            // Loop from start to end (inclusive)
+            for (let i = start; i <= end; i++) {
+              // Convert 1-based (user) to 0-based (array)
+              if (i > 0 && i <= totalPages) selectedIndices.add(i - 1);
+            }
+          }
+        } else {
+          // Handle single number "3"
+          const pageNum = parseInt(part);
+          if (!isNaN(pageNum) && pageNum > 0 && pageNum <= totalPages) {
+            selectedIndices.add(pageNum - 1);
+          }
+        }
+      });
+      // Convert Set to Array and Sort
+      pageIndicesToProcess = Array.from(selectedIndices).sort((a, b) => a - b);
     }
 
-    console.log(`Applying crop to ${pagesToProcess.length} page(s)...`);
-
-    // 4. Apply crop to each selected page
-    for (const page of pagesToProcess) {
-      const { width, height } = page.getSize();
-
-      // Convert percentage values from frontend to PDF points
-      // PDF origin (0,0) is bottom-left. Frontend origin is top-left.
-
-      // Calculate dimensions
-      const cropWidth = (crop.width / 100) * width;
-      const cropHeight = (crop.height / 100) * height;
-
-      // Calculate X (distance from left is same for both)
-      const cropX = (crop.x / 100) * width;
-
-      // Calculate Y (distance from bottom)
-      // PDF Y = Page Height - (Top Margin from UI) - (Crop Height)
-      const cropY = height - ((crop.y / 100) * height) - cropHeight;
-
-      // Set both CropBox (visible area) and MediaBox (physical page size)
-      page.setCropBox(cropX, cropY, cropWidth, cropHeight);
-      page.setMediaBox(cropX, cropY, cropWidth, cropHeight);
+    if (pageIndicesToProcess.length === 0) {
+      return res.status(400).json({ error: 'Invalid page selection. Please check your page numbers.' });
     }
 
-    // 5. Save and Send
-    const croppedPdfBytes = await pdfDoc.save();
-    const outputName = `cropped_${req.file.originalname}`;
+    console.log(`Processing ${pageIndicesToProcess.length} page(s)...`);
+
+    // 5. Embed Pages
+    // We only embed the pages we intend to keep
+    const embeddedPages = await newDoc.embedPages(pageIndicesToProcess.map(i => srcPages[i]));
+
+    // 6. Apply Crop and Add to New Doc
+    for (let i = 0; i < pageIndicesToProcess.length; i++) {
+      const srcIdx = pageIndicesToProcess[i];
+      const srcPage = srcPages[srcIdx];
+      const embeddedPage = embeddedPages[i];
+      
+      const { width: originalWidth, height: originalHeight } = srcPage.getSize();
+
+      // Calculate Crop Dimensions (Convert % to Points)
+      const cropW = (crop.width / 100) * originalWidth;
+      const cropH = (crop.height / 100) * originalHeight;
+      const cropX = (crop.x / 100) * originalWidth;
+      const cropY = originalHeight - ((crop.y / 100) * originalHeight) - cropH;
+
+      // Create new page exactly the size of the crop
+      const newPage = newDoc.addPage([cropW, cropH]);
+
+      // Draw original page shifted to show only the crop area
+      newPage.drawPage(embeddedPage, {
+        x: -cropX,
+        y: -cropY,
+        width: originalWidth,
+        height: originalHeight,
+      });
+    }
+
+    // 7. Save and Send
+    const croppedPdfBytes = await newDoc.save();
+    const outputName = `cropped_selection_${req.file.originalname}`;
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
     res.send(Buffer.from(croppedPdfBytes));
 
-    // Log & Cleanup
-    await Operation.create({ operation: 'crop-pdf', filename: req.file.originalname, status: 'success' });
-    await fs.unlink(uploadedPath).catch(() => { });
+    // Cleanup
+    await fs.unlink(uploadedPath).catch(() => {});
+    console.log("✅ Custom crop successful");
 
   } catch (err) {
     console.error('❌ Crop PDF Error:', err);
-    await Operation.create({
-      operation: 'crop-pdf',
-      filename: req.file?.originalname || 'unknown',
-      status: 'failed'
-    }).catch(() => { });
-
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
     res.status(500).json({ error: 'Failed to crop PDF: ' + err.message });
   }
 });

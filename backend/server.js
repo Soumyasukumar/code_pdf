@@ -12,7 +12,7 @@ const editRoutes = require('./routes/editRoutes');
 const organizeRoutes = require('./routes/organizeRoutes');
 const securityRoutes = require('./routes/securityRoutes');
 const compareRoutes = require('./routes/compareRoutes');
-const thumbnailRoutes = require('./routes/thumbnailRoutes');
+// const thumbnailRoutes = require('./routes/thumbnailRoutes');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -34,7 +34,7 @@ app.use('/api', editRoutes);
 app.use('/api', organizeRoutes);
 app.use('/api', securityRoutes);
 app.use('/api', compareRoutes);
-app.use('/api', thumbnailRoutes);
+// app.use('/api', thumbnailRoutes);
 
 // 404 & Error Handler
 app.use((req, res) => res.status(404).json({ error: 'Endpoint not found' }));

@@ -3,7 +3,7 @@ import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 
 const initialWatermarkSettings = {
-  text: 'Sukumar PDF',
+  text: 'Add Watermakr here',
   fontFamily: 'Helvetica',
   fontSize: 50,
   textColor: '#CC3333',

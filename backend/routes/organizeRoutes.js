@@ -2,33 +2,28 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs').promises;
 const path = require('path');
-const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
-const { getFontAndStyle, calculatePosition, hexToRgb, generateThumbnails } = require('../utils/pdfHelpers');
+const { PDFDocument, degrees } = require('pdf-lib');
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
 const Operation = require('../models/Operation');
 const upload = require('../config/upload');
-
-
-
-
 
 // ------------------ ORGANIZE PDF (Reorder, Delete, Rotate) ------------------
 router.post('/organize-pdf', upload.single('pdfFile'), async (req, res) => {
   let uploadedPath = null;
-  let thumbnailCleanup = null;
 
   try {
     console.log('📚 Organize PDF request received');
 
-    if (!req.file) {
-      return res.status(400).json({ error: 'No PDF file uploaded' });
-    }
-    if (!req.body.pageOrder) {
-      return res.status(400).json({ error: 'Page order data is required' });
-    }
+    // 1. Validation
+    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
+    if (!req.body.pageOrder) return res.status(400).json({ error: 'Page order data is required' });
 
     uploadedPath = req.file.path;
 
-    // Parse page instructions from frontend
+    // Parse instructions from frontend
+    // Format: [{ originalIndex: 0, rotate: 90 }, ...] — order defines new sequence
     let pageInstructions;
     try {
       pageInstructions = JSON.parse(req.body.pageOrder);
@@ -40,58 +35,52 @@ router.post('/organize-pdf', upload.single('pdfFile'), async (req, res) => {
       return res.status(400).json({ error: 'Page order cannot be empty' });
     }
 
-    // Optional: Generate thumbnails (for logging or future use — not sent to frontend)
-    try {
-      const result = await generateThumbnails(uploadedPath);
-      console.log(`✅ Generated ${result.thumbnails.length} thumbnails (server-side only)`);
-      thumbnailCleanup = result.cleanup;
-    } catch (thumbErr) {
-      console.warn('⚠️ Thumbnail generation skipped:', thumbErr.message);
-      // Continue without thumbnails — not critical for organizing
-    }
-
-    // Load original PDF
+    // 2. Load Original PDF
     const pdfBytes = await fs.readFile(uploadedPath);
     const sourcePdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
     const totalPages = sourcePdf.getPageCount();
 
-    // Validate indices
+    // 3. Validate Page Indices
     const indicesToCopy = pageInstructions.map(p => p.originalIndex);
-    if (indicesToCopy.some(i => i < 0 || i >= totalPages)) {
-      return res.status(400).json({ error: 'Invalid page index in request' });
+    const invalidIndex = indicesToCopy.find(i => i < 0 || i >= totalPages);
+    if (invalidIndex !== undefined) {
+      return res.status(400).json({ error: `Invalid page index: ${invalidIndex}` });
     }
 
-    // Create new PDF
+    // 4. Create New PDF & Copy Pages Efficiently
     const newPdf = await PDFDocument.create();
     const copiedPages = await newPdf.copyPages(sourcePdf, indicesToCopy);
 
-    // Add pages with rotation
+    // 5. Add Pages with Optional Rotation
     pageInstructions.forEach((instr, i) => {
       const page = copiedPages[i];
+
       if (instr.rotate && instr.rotate !== 0) {
         const currentRotation = page.getRotation().angle;
-        page.setRotation(degrees(currentRotation + instr.rotate));
+        const newRotation = (currentRotation + instr.rotate + 360) % 360; // Normalize
+        page.setRotation(degrees(newRotation));
       }
+
       newPdf.addPage(page);
     });
 
-    // Save final PDF
+    // 6. Save and Send Final PDF
     const organizedPdfBytes = await newPdf.save();
-    const outputFilename = `organized_${req.file.originalname}`;
+    const outputName = `organized_${req.file.originalname}`;
 
-    // === SEND PDF DIRECTLY AS DOWNLOAD (matches frontend blob expectation) ===
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${outputFilename}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
     res.send(Buffer.from(organizedPdfBytes));
-    // ======================================================================
 
-    // Log success
+    // Log Success
     await Operation.create({
       operation: 'organize-pdf',
       filename: req.file.originalname,
       status: 'success'
     });
 
+    // Cleanup uploaded file
+    await fs.unlink(uploadedPath).catch(() => {});
   } catch (err) {
     console.error('❌ Organize PDF Error:', err);
 
@@ -101,20 +90,88 @@ router.post('/organize-pdf', upload.single('pdfFile'), async (req, res) => {
       status: 'failed'
     }).catch(() => {});
 
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+
     res.status(500).json({ error: 'Failed to organize PDF: ' + err.message });
-  } finally {
-    // Cleanup uploaded file
-    if (uploadedPath) {
-      await fs.unlink(uploadedPath).catch(() => {});
-    }
-    // Cleanup thumbnails if generated
-    if (thumbnailCleanup) {
-      await thumbnailCleanup().catch(() => {});
-    }
   }
 });
 
+// ------------------ GET PDF THUMBNAILS (Direct pdftoppm execution) ------------------
+router.post('/get-pdf-thumbnails', upload.single('pdfFile'), async (req, res) => {
+  const tempDir = path.join(__dirname, '..', 'temp_thumbnails', `preview_${Date.now()}`);
+  let uploadedPath = null;
 
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    uploadedPath = req.file.path;
+
+    // 1. Create temporary directory
+    await fs.mkdir(tempDir, { recursive: true });
+
+    // 2. Define output prefix for pdftoppm
+    const outPrefix = path.join(tempDir, 'page');
+
+    // 3. Run pdftoppm to generate JPEG thumbnails
+    const cmd = `pdftoppm -jpeg -scale-to 300 "${uploadedPath}" "${outPrefix}"`;
+    console.log('🖼️ Generating thumbnails with command:', cmd);
+
+    try {
+      await execPromise(cmd);
+    } catch (execError) {
+      console.error('pdftoppm failed:', execError.message);
+      throw new Error('Failed to generate thumbnails. Is Poppler (pdftoppm) installed and in PATH?');
+    }
+
+    // 4. Read and sort generated thumbnail files
+    let imageFiles = await fs.readdir(tempDir);
+    imageFiles = imageFiles
+      .filter(f => f.match(/^page-\d+\.jpg$/i))
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/page-(\d+)\.jpg/i)[1]);
+        const numB = parseInt(b.match(/page-(\d+)\.jpg/i)[1]);
+        return numA - numB;
+      });
+
+    if (imageFiles.length === 0) {
+      throw new Error('No pages found in PDF or generation failed.');
+    }
+
+    console.log(`✅ Generated ${imageFiles.length} thumbnails`);
+
+    // 5. Convert to base64 and send to frontend
+    const thumbnails = await Promise.all(
+      imageFiles.map(async (file, index) => {
+        const filePath = path.join(tempDir, file);
+        const buffer = await fs.readFile(filePath);
+        return {
+          id: `page-${index}`,
+          originalIndex: index,
+          src: `data:image/jpeg;base64,${buffer.toString('base64')}`,
+          rotation: 0
+        };
+      })
+    );
+
+    res.json({ thumbnails });
+
+    // 6. Cleanup: remove uploaded file and temp thumbnails
+    await fs.unlink(uploadedPath).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  } catch (err) {
+    console.error('❌ Thumbnail Generation Error:', err);
+
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+
+    let userMessage = err.message || 'Failed to generate thumbnails';
+    if (err.message.includes('pdftoppm') || err.message.includes('command not found')) {
+      userMessage = 'Server missing Poppler utilities. Please install pdftoppm.';
+    }
+
+    res.status(500).json({ error: userMessage });
+  }
+});
 
 // ------------------ ADD PAGE NUMBERS ------------------
 router.post('/add-page-numbers', upload.single('pdfFile'), async (req, res) => {
@@ -124,81 +181,60 @@ router.post('/add-page-numbers', upload.single('pdfFile'), async (req, res) => {
     console.log('🔢 Add Page Numbers request received');
 
     if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
+    if (!req.body.settings) return res.status(400).json({ error: 'Settings are required' });
 
     uploadedPath = req.file.path;
     const settings = JSON.parse(req.body.settings);
 
-    // Settings defaults
     const {
-      position = 'bottom-center', // top-left, top-center, top-right, bottom-left...
-      margin = 30,                // Distance from edge
+      position = 'bottom-center',
+      margin = 30,
       fromPage = 1,
-      toPage = 0,                 // 0 means last page
-      text = '{n}',               // Format: "Page {n}"
-      startFrom = 1,              // The number to start counting at
-      fontSize = 12,
-      fontFamily = 'Helvetica'
+      toPage = 0,
+      text = '{n}',
+      startFrom = 1,
+      fontSize = 12
     } = settings;
 
-    // Load PDF
     const pdfBytes = await fs.readFile(uploadedPath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pages = pdfDoc.getPages();
     const totalPages = pdfDoc.getPageCount();
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const font = await pdfDoc.embedFont('Helvetica');
 
-    // Determine Range
-    const startIdx = (parseInt(fromPage) || 1) - 1;
-    const endIdx = (parseInt(toPage) || totalPages) - 1;
+    const startIdx = Math.max(0, (parseInt(fromPage) || 1) - 1);
+    const endIdx = toPage === 0 ? totalPages - 1 : Math.min(totalPages - 1, (parseInt(toPage) || totalPages) - 1);
 
-    // Iterate pages
-    for (let i = 0; i < totalPages; i++) {
-      // Skip if outside user's selected range
-      if (i < startIdx || i > endIdx) continue;
-
+    for (let i = startIdx; i <= endIdx; i++) {
       const page = pages[i];
       const { width, height } = page.getSize();
-
-      // Calculate the actual number to print
-      // (i - startIdx) is how many pages we've processed in the range
       const currentNumber = parseInt(startFrom) + (i - startIdx);
       const textToDraw = text.replace('{n}', currentNumber).replace('{p}', totalPages);
 
-      // Calculate Text Dimensions
-      const textWidth = font.widthOfTextAtSize(textToDraw, parseInt(fontSize));
-      const textHeight = font.heightAtSize(parseInt(fontSize));
-
-      // Calculate Position (X, Y)
-      let x, y;
+      const textWidth = font.widthOfTextAtSize(textToDraw, fontSize);
+      const textHeight = font.heightAtSize(fontSize);
       const m = parseInt(margin);
 
-      // Horizontal Logic
-      if (position.includes('left')) {
-        x = m;
-      } else if (position.includes('center')) {
-        x = (width / 2) - (textWidth / 2);
-      } else { // right
-        x = width - textWidth - m;
-      }
+      let x, y;
 
-      // Vertical Logic
-      if (position.includes('top')) {
-        y = height - textHeight - m;
-      } else { // bottom
-        y = m;
-      }
+      // Horizontal
+      if (position.includes('left')) x = m;
+      else if (position.includes('center')) x = width / 2 - textWidth / 2;
+      else x = width - textWidth - m;
 
-      // Draw the number
+      // Vertical
+      if (position.includes('top')) y = height - textHeight - m;
+      else y = m + textHeight / 4; // Slight baseline adjustment
+
       page.drawText(textToDraw, {
-        x: x,
-        y: y,
-        size: parseInt(fontSize),
-        font: font,
-        color: rgb(0, 0, 0),
+        x,
+        y,
+        size: fontSize,
+        font,
+        color: rgb(0, 0, 0)
       });
     }
 
-    // Save and Send
     const resultBytes = await pdfDoc.save();
     const outputName = `numbered_${req.file.originalname}`;
 
@@ -206,16 +242,18 @@ router.post('/add-page-numbers', upload.single('pdfFile'), async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
     res.send(Buffer.from(resultBytes));
 
-    // Cleanup
-    await fs.unlink(uploadedPath).catch(() => { });
-    await Operation.create({ operation: 'page-numbers', filename: req.file.originalname, status: 'success' });
+    await Operation.create({
+      operation: 'page-numbers',
+      filename: req.file.originalname,
+      status: 'success'
+    });
 
+    await fs.unlink(uploadedPath).catch(() => {});
   } catch (err) {
     console.error('❌ Page Numbers Error:', err);
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
+    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
     res.status(500).json({ error: 'Failed to add page numbers: ' + err.message });
   }
 });
-
 
 module.exports = router;
