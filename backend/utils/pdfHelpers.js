@@ -92,9 +92,59 @@ const getCellStyles = (cell) => {
     };
 };
 
+async function generateThumbnails(pdfPath) {
+  const tempDir = path.join(__dirname, '..', 'temp_thumbnails', `preview_${Date.now()}`);
+  await fs.mkdir(tempDir, { recursive: true });
+
+  const outPrefix = path.join(tempDir, 'page');
+
+  const cmd = `pdftoppm -jpeg -scale-to 300 "${pdfPath}" "${outPrefix}"`;
+
+  try {
+    await execPromise(cmd);
+  } catch (err) {
+    throw new Error('pdftoppm failed. Is Poppler installed and in PATH?');
+  }
+
+  let files = await fs.readdir(tempDir);
+  files = files
+    .filter(f => /^page-\d+\.jpg$/.test(f))
+    .sort((a, b) => {
+      const numA = parseInt(a.match(/page-(\d+)\.jpg/)[1]);
+      const numB = parseInt(b.match(/page-(\d+)\.jpg/)[1]);
+      return numA - numB;
+    });
+
+  if (files.length === 0) {
+    throw new Error('No thumbnails generated');
+  }
+
+  const thumbnails = await Promise.all(
+    files.map(async (file, index) => {
+      const filePath = path.join(tempDir, file);
+      const buffer = await fs.readFile(filePath);
+      return {
+        originalIndex: index,
+        src: `data:image/jpeg;base64,${buffer.toString('base64')}`,
+        rotation: 0
+      };
+    })
+  );
+
+  // Return both data and cleanup function
+  return {
+    thumbnails,
+    cleanup: async () => {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  };
+};
+
 module.exports = {
   getFontAndStyle,
   calculatePosition,
   hexToRgb,
   getCellStyles,
+  generateThumbnails
+
 };

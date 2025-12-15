@@ -3,26 +3,32 @@ const router = express.Router();
 const fs = require('fs').promises;
 const path = require('path');
 const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
-const { getFontAndStyle, calculatePosition, hexToRgb } = require('../utils/pdfHelpers');
+const { getFontAndStyle, calculatePosition, hexToRgb, generateThumbnails } = require('../utils/pdfHelpers');
 const Operation = require('../models/Operation');
 const upload = require('../config/upload');
+
+
+
+
 
 // ------------------ ORGANIZE PDF (Reorder, Delete, Rotate) ------------------
 router.post('/organize-pdf', upload.single('pdfFile'), async (req, res) => {
   let uploadedPath = null;
+  let thumbnailCleanup = null;
 
   try {
     console.log('📚 Organize PDF request received');
 
-    // 1. Validation
-    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
-    if (!req.body.pageOrder) return res.status(400).json({ error: 'Page order data is required' });
+    if (!req.file) {
+      return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+    if (!req.body.pageOrder) {
+      return res.status(400).json({ error: 'Page order data is required' });
+    }
 
     uploadedPath = req.file.path;
 
-    // Parse the instruction from frontend
-    // Expected Format: Array of objects [{ originalIndex: 0, rotate: 0 }, { originalIndex: 2, rotate: 90 }, ...]
-    // Note: The order of the array determines the new page sequence.
+    // Parse page instructions from frontend
     let pageInstructions;
     try {
       pageInstructions = JSON.parse(req.body.pageOrder);
@@ -34,69 +40,77 @@ router.post('/organize-pdf', upload.single('pdfFile'), async (req, res) => {
       return res.status(400).json({ error: 'Page order cannot be empty' });
     }
 
-    // 2. Load Original PDF
+    // Optional: Generate thumbnails (for logging or future use — not sent to frontend)
+    try {
+      const result = await generateThumbnails(uploadedPath);
+      console.log(`✅ Generated ${result.thumbnails.length} thumbnails (server-side only)`);
+      thumbnailCleanup = result.cleanup;
+    } catch (thumbErr) {
+      console.warn('⚠️ Thumbnail generation skipped:', thumbErr.message);
+      // Continue without thumbnails — not critical for organizing
+    }
+
+    // Load original PDF
     const pdfBytes = await fs.readFile(uploadedPath);
     const sourcePdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
     const totalPages = sourcePdf.getPageCount();
 
-    // 3. Create New PDF
-    const newPdf = await PDFDocument.create();
-
-    // 4. Process Instructions
-    // We collect all needed indices first to batch copy (efficient)
-    const indicesToCopy = pageInstructions.map(p => p.originalIndex);
-
     // Validate indices
-    const validIndices = indicesToCopy.filter(i => i >= 0 && i < totalPages);
-    if (validIndices.length !== indicesToCopy.length) {
-      throw new Error("Invalid page index detected in request.");
+    const indicesToCopy = pageInstructions.map(p => p.originalIndex);
+    if (indicesToCopy.some(i => i < 0 || i >= totalPages)) {
+      return res.status(400).json({ error: 'Invalid page index in request' });
     }
 
-    // Copy pages to the new document
+    // Create new PDF
+    const newPdf = await PDFDocument.create();
     const copiedPages = await newPdf.copyPages(sourcePdf, indicesToCopy);
 
-    // Add pages to new PDF and apply rotation if needed
+    // Add pages with rotation
     pageInstructions.forEach((instr, i) => {
       const page = copiedPages[i];
-
-      // Apply extra rotation if requested (on top of existing rotation)
-      // 'rotate' in instruction is relative (e.g., 90, 180, -90)
       if (instr.rotate && instr.rotate !== 0) {
         const currentRotation = page.getRotation().angle;
         page.setRotation(degrees(currentRotation + instr.rotate));
       }
-
       newPdf.addPage(page);
     });
 
-    // 5. Save and Send
+    // Save final PDF
     const organizedPdfBytes = await newPdf.save();
-    const outputName = `organized_${req.file.originalname}`;
+    const outputFilename = `organized_${req.file.originalname}`;
 
+    // === SEND PDF DIRECTLY AS DOWNLOAD (matches frontend blob expectation) ===
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${outputFilename}"`);
     res.send(Buffer.from(organizedPdfBytes));
+    // ======================================================================
 
-    // Log Success
+    // Log success
     await Operation.create({
       operation: 'organize-pdf',
       filename: req.file.originalname,
       status: 'success'
     });
 
-    // Cleanup
-    await fs.unlink(uploadedPath).catch(() => { });
-
   } catch (err) {
     console.error('❌ Organize PDF Error:', err);
+
     await Operation.create({
       operation: 'organize-pdf',
       filename: req.file?.originalname || 'unknown',
       status: 'failed'
-    }).catch(() => { });
+    }).catch(() => {});
 
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => { });
     res.status(500).json({ error: 'Failed to organize PDF: ' + err.message });
+  } finally {
+    // Cleanup uploaded file
+    if (uploadedPath) {
+      await fs.unlink(uploadedPath).catch(() => {});
+    }
+    // Cleanup thumbnails if generated
+    if (thumbnailCleanup) {
+      await thumbnailCleanup().catch(() => {});
+    }
   }
 });
 
