@@ -4,7 +4,8 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs').promises;
 const path = require('path');
-const pdfParse = require('pdf-parse');
+const { PDFParse } = require('pdf-parse');
+const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
 const htmlToPdfMake = require('html-to-pdfmake');
 const { JSDOM } = require('jsdom');
@@ -26,54 +27,80 @@ const printer = new PdfPrinter(fonts);
 
 // PDF → Word
 router.post('/pdf-to-word', upload.single('pdfFile'), async (req, res) => {
-  let uploadedPath = null;
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
-    uploadedPath = req.file.path;
-    const dataBuffer = await fs.readFile(uploadedPath);
-    const pdfData = await pdfParse(dataBuffer);
-    const lines = pdfData.text.split('\n').map(l => l.trim()).filter(Boolean);
-    const doc = new Document({ sections: [{ children: lines.map(text => new Paragraph({ children: [new TextRun(text)] })) }] });
-    const buffer = await Packer.toBuffer(doc);
-    const outputName = req.file.originalname.replace(/.pdf$/i, '') + '.docx';
-    res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'Content-Disposition': `attachment; filename="${outputName}"` });
-    res.send(buffer);
-    await Operation.create({ operation: 'pdf-to-word', filename: req.file.originalname, status: 'success' });
-    await fs.unlink(uploadedPath);
-  } catch (err) {
-    console.error('PDF → Word error:', err);
-    await Operation.create({ operation: 'pdf-to-word', filename: req.file?.originalname || 'unknown', status: 'failed' });
-    if (uploadedPath) await fs.unlink(uploadedPath);
-    res.status(500).json({ error: 'Failed to convert PDF to Word' });
-  }
-});
+    let uploadedPath = null;
+    let parser = null;
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
+        uploadedPath = req.file.path;
+        const dataBuffer = await fs.readFile(uploadedPath);
 
+        // 1. Initialize parser and extract all text data
+        parser = new PDFParse({ data: dataBuffer });
+        const pdfData = await parser.getText(); // pdfData.text contains all text
 
-router.post('/word-to-pdf', upload.single('wordFile'), async (req, res) => {
-  let uploadedPath = null;
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No Word file uploaded' });
-    if (!req.file.originalname.match(/.docx$/i)) return res.status(400).json({ error: 'Only .docx files are supported' });
-    uploadedPath = req.file.path;
-    const result = await mammoth.convertToHtml({ path: uploadedPath });
-    let html = result.value.replace(/<img[^>]*>/gi, "");
-    const dom = new JSDOM('');
-    const pdfmakeContent = htmlToPdfMake(html, { window: dom.window });
-    const docDefinition = { content: pdfmakeContent, defaultStyle: { font: 'Roboto' } };
-    const pdfDoc = printer.createPdfKitDocument(docDefinition);
-    const outputName = req.file.originalname.replace(/.docx$/i, '.pdf');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
-    pdfDoc.pipe(res);
-    pdfDoc.end();
-    await Operation.create({ operation: 'word-to-pdf', filename: req.file.originalname, status: 'success' });
-    await fs.unlink(uploadedPath);
-  } catch (err) {
-    console.error("Word→PDF error:", err);
-    await Operation.create({ operation: 'word-to-pdf', filename: req.file?.originalname || 'unknown', status: 'failed' }).catch(() => {});
-    if (uploadedPath) await fs.unlink(uploadedPath);
-    res.status(500).json({ error: 'Conversion failed: ' + err.message });
-  }
+        // Get the full text property
+        const fullText = pdfData.text; 
+        
+        // 2. Split the text by the Form Feed character (\f), which pdf-parse often 
+        //    inserts as a page separator. This creates an array where each item 
+        //    is the content of a single PDF page.
+        const pageTexts = fullText.split('\f');
+        
+        const docChildren = [];
+
+        // 3. Iterate through each page's content
+        pageTexts.forEach((pageText, index) => {
+            // Split the page text into lines/paragraphs, filter out empty lines
+            const lines = pageText.split('\n').map(l => l.trim()).filter(Boolean);
+
+            // Add paragraphs for the current page
+            lines.forEach(text => {
+                docChildren.push(new Paragraph({
+                    children: [new TextRun(text)],
+                    // Add slight spacing after each paragraph for better readability
+                    spacing: { after: 100 } 
+                }));
+            });
+
+            // 4. Insert a DOCX Page Break after every page's content, 
+            //    but skip the page break after the last page.
+            if (index < pageTexts.length - 1) {
+                docChildren.push(
+                    new Paragraph({
+                        break: "page", // This is the DOCX page break command
+                    })
+                );
+            }
+        });
+        
+        // 5. Create the DOCX document
+        const doc = new Document({ sections: [{ children: docChildren }] });
+        
+        const buffer = await Packer.toBuffer(doc);
+        const outputName = req.file.originalname.replace(/.pdf$/i, '') + '.docx';
+
+        // 6. Set headers and send the file
+        res.set({ 
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 
+            'Content-Disposition': `attachment; filename="${outputName}"` 
+        });
+        res.send(buffer);
+
+        // 7. Log and Cleanup
+        await Operation.create({ operation: 'pdf-to-word', filename: req.file.originalname, status: 'success' });
+        await parser.destroy(); 
+        await fs.unlink(uploadedPath);
+        
+    } catch (err) {
+        console.error('PDF → Word error:', err);
+        
+        // Log failure and cleanup
+        await Operation.create({ operation: 'pdf-to-word', filename: req.file?.originalname || 'unknown', status: 'failed' });
+        if (parser) await parser.destroy().catch(() => {});
+        if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
+        
+        res.status(500).json({ error: 'Failed to convert PDF to Word' });
+    }
 });
 
 

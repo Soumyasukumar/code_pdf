@@ -2,12 +2,14 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs').promises;
 const path = require('path');
-const { PDFDocument, degrees } = require('pdf-lib');
+const { PDFDocument, degrees, rgb } = require('pdf-lib');
 const { exec } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
 const Operation = require('../models/Operation');
 const upload = require('../config/upload');
+const { getFontAndStyle, calculatePosition, hexToRgb, getCellStyles } = require('../utils/pdfHelpers');
+
 
 // ------------------ ORGANIZE PDF (Reorder, Delete, Rotate) ------------------
 router.post('/organize-pdf', upload.single('pdfFile'), async (req, res) => {
@@ -176,14 +178,47 @@ router.post('/get-pdf-thumbnails', upload.single('pdfFile'), async (req, res) =>
 // ------------------ ADD PAGE NUMBERS ------------------
 router.post('/add-page-numbers', upload.single('pdfFile'), async (req, res) => {
   let uploadedPath = null;
+  let tempDir = null;
 
   try {
-    console.log('🔢 Add Page Numbers request received');
+    console.log('Add Page Numbers request received');
 
     if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
-    if (!req.body.settings) return res.status(400).json({ error: 'Settings are required' });
+    uploadedPath = toWslPath(req.file.path);
 
-    uploadedPath = req.file.path;
+    // === 1. Generate Thumbnails (Always) ===
+    tempDir = path.join(__dirname, '..', 'temp_thumbnails', `preview_${Date.now()}`);
+    await fs.mkdir(tempDir, { recursive: true });
+    const outPrefix = path.join(tempDir, 'page');
+
+    const cmd = `pdftoppm -jpeg -scale-to 300 "${uploadedPath}" "${outPrefix}"`;
+    await execPromise(cmd);
+
+    let imageFiles = await fs.readdir(tempDir);
+    imageFiles = imageFiles
+      .filter(f => /^page-\d+\.jpg$/i.test(f))
+      .sort((a, b) => parseInt(a.match(/(\d+)/)[1]) - parseInt(b.match(/(\d+)/)[1]));
+
+    const thumbnails = await Promise.all(
+      imageFiles.map(async (file, i) => {
+        const buffer = await fs.readFile(path.join(tempDir, file));
+        return {
+          id: `page-${i}`,
+          originalIndex: i,
+          src: `data:image/jpeg;base64,${buffer.toString('base64')}`,
+          rotation: 0
+        };
+      })
+    );
+
+    // === 2. If only preview requested → return thumbnails only ===
+    if (req.body.previewOnly === 'true' || !req.body.settings) {
+      // Cleanup uploaded file
+      await fs.unlink(req.file.path).catch(() => {});
+      return res.json({ thumbnails });
+    }
+
+    // === 3. Apply Page Numbers ===
     const settings = JSON.parse(req.body.settings);
 
     const {
@@ -217,14 +252,12 @@ router.post('/add-page-numbers', upload.single('pdfFile'), async (req, res) => {
 
       let x, y;
 
-      // Horizontal
       if (position.includes('left')) x = m;
       else if (position.includes('center')) x = width / 2 - textWidth / 2;
       else x = width - textWidth - m;
 
-      // Vertical
       if (position.includes('top')) y = height - textHeight - m;
-      else y = m + textHeight / 4; // Slight baseline adjustment
+      else y = m + textHeight / 4;
 
       page.drawText(textToDraw, {
         x,
@@ -238,6 +271,11 @@ router.post('/add-page-numbers', upload.single('pdfFile'), async (req, res) => {
     const resultBytes = await pdfDoc.save();
     const outputName = `numbered_${req.file.originalname}`;
 
+    // === Cleanup ===
+    await fs.unlink(req.file.path).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+
+    // === Send Final PDF ===
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${outputName}"`);
     res.send(Buffer.from(resultBytes));
@@ -248,11 +286,11 @@ router.post('/add-page-numbers', upload.single('pdfFile'), async (req, res) => {
       status: 'success'
     });
 
-    await fs.unlink(uploadedPath).catch(() => {});
   } catch (err) {
-    console.error('❌ Page Numbers Error:', err);
-    if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
-    res.status(500).json({ error: 'Failed to add page numbers: ' + err.message });
+    console.error('Page Numbers Error:', err);
+    if (uploadedPath) await fs.unlink(req.file.path).catch(() => {});
+    if (tempDir) await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    res.status(500).json({ error: 'Failed to process page numbers: ' + err.message });
   }
 });
 

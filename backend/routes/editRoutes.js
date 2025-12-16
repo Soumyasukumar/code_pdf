@@ -7,32 +7,76 @@ const { getFontAndStyle, calculatePosition, hexToRgb, getCellStyles } = require(
 const Operation = require('../models/Operation');
 const upload = require('../config/upload');
 
-// Add Watermark
 router.post('/add-watermark', upload.single('pdfFile'), async (req, res) => {
   let uploadedPath = null;
   try {
-    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded.' });
+    // 1. Check file
+    if (!req.file) {
+      return res.status(400).json({ error: 'No PDF file uploaded.' });
+    }
     uploadedPath = req.file.path;
-    const { watermarks } = JSON.parse(req.body.watermarkData);
+
+    // 2. Parse watermark data safely
+    let watermarkConfig;
+    try {
+      watermarkConfig = JSON.parse(req.body.watermarkData);
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid watermarkData JSON format.' });
+    }
+    const { watermarks } = watermarkConfig;
+    if (!Array.isArray(watermarks) || watermarks.length === 0) {
+      return res.status(400).json({ error: 'No watermarks provided.' });
+    }
+
+    // 3. Load PDF
     const pdfBytes = await fs.readFile(uploadedPath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pages = pdfDoc.getPages();
-    for (const watermark of watermarks) {
-      if (watermark.type === 'text') {
-        const { text, fontSize, textColor, isBold, isItalic, rotation, opacity, positionKey, isMosaic, fontFamily } = watermark;
+
+    // 4. Process each watermark
+    for (const wm of watermarks) {
+      const { type } = wm;
+
+      // TEXT WATERMARK
+      if (type === 'text') {
+        const {
+          text,
+          fontSize = 50,
+          textColor = '#000000',
+          isBold = false,
+          isItalic = false,
+          rotation = 0,
+          opacity = 0.5,
+          positionKey = 'center',
+          isMosaic = false,
+          fontFamily = 'Helvetica'
+        } = wm;
+
         const font = await getFontAndStyle(pdfDoc, fontFamily, isBold, isItalic);
         const pdfColor = hexToRgb(textColor);
         const textWidth = font.widthOfTextAtSize(text, fontSize);
         const textHeight = font.heightAtSize(fontSize);
-        const drawOptions = { size: fontSize, font, color: pdfColor, opacity, rotate: degrees(rotation) };
-        const drawText = (x, y) => pages.forEach(page => page.drawText(text, { ...drawOptions, x, y }));
+
+        const drawOptions = {
+          x: 0, y: 0,
+          size: fontSize,
+          font,
+          color: pdfColor,
+          opacity,
+          rotate: degrees(rotation),
+        };
+
+        const drawTextAt = (x, y) => {
+          pages.forEach(page => page.drawText(text, { ...drawOptions, x, y }));
+        };
+
         if (isMosaic) {
-          const gap = 300;
-          const horizontalRepeats = Math.ceil(1000 / gap) * 2;
-          const verticalRepeats = Math.ceil(1000 / gap) * 2;
-          for (let i = 0; i < horizontalRepeats; i++) {
-            for (let j = 0; j < verticalRepeats; j++) {
-              drawText(-1000 + i * gap, -1000 + j * gap);
+          const gap = 280;
+          const cols = 10;
+          const rows = 12;
+          for (let i = 0; i < cols; i++) {
+            for (let j = 0; j < rows; j++) {
+              drawTextAt(-600 + i * gap, -800 + j * gap);
             }
           }
         } else {
@@ -42,24 +86,102 @@ router.post('/add-watermark', upload.single('pdfFile'), async (req, res) => {
             page.drawText(text, { ...drawOptions, x, y });
           });
         }
-      } else if (watermark.type === 'image') {
-        // Image watermark logic (same as original)
-        // ... (copy exact code from your server.js)
+      }
+
+      // IMAGE WATERMARK
+      else if (type === 'image') {
+        const {
+          imageData,         // data:image/png;base64,xxxx
+          width = 200,
+          height = 200,
+          opacity = 0.4,
+          rotation = 0,
+          positionKey = 'center',
+          isMosaic = false
+        } = wm;
+
+        if (!imageData || !imageData.startsWith('data:image/')) {
+          console.warn('Invalid or missing imageData for image watermark');
+          continue;
+        }
+
+        // Extract base64
+        const base64String = imageData.split(';base64,').pop();
+        const imageBytes = Buffer.from(base64String, 'base64');
+
+        // Embed image (PNG or JPG)
+        let embeddedImage;
+        try {
+          if (imageData.includes('image/png')) {
+            embeddedImage = await pdfDoc.embedPng(imageBytes);
+          } else if (imageData.includes('image/jpeg') || imageData.includes('image/jpg')) {
+            embeddedImage = await pdfDoc.embedJpg(imageBytes);
+          } else {
+            console.warn('Unsupported image format');
+            continue;
+          }
+        } catch (embedErr) {
+          console.warn('Failed to embed image:', embedErr.message);
+          continue;
+        }
+
+        const drawImageAt = (x, y) => {
+          pages.forEach(page => {
+            const dims = embeddedImage.scaleToFit(width, height);
+            page.drawImage(embeddedImage, {
+              x,
+              y,
+              width: dims.width,
+              height: dims.height,
+              opacity,
+              rotate: degrees(rotation),
+            });
+          });
+        };
+
+        if (isMosaic) {
+          const gap = 300;
+          const cols = 10;
+          const rows = 12;
+          for (let i = 0; i < cols; i++) {
+            for (let j = 0; j < rows; j++) {
+              drawImageAt(-700 + i * gap, -900 + j * gap);
+            }
+          }
+        } else {
+          pages.forEach(page => {
+            const { width: pageWidth, height: pageHeight } = page.getSize();
+            const dims = embeddedImage.scaleToFit(width, height);
+            const { x, y } = calculatePosition(pageWidth, pageHeight, dims.width, dims.height, positionKey);
+
+            page.drawImage(embeddedImage, {
+              x,
+              y,
+              width: dims.width,
+              height: dims.height,
+              opacity,
+              rotate: degrees(rotation),
+            });
+          });
+        }
       }
     }
+
+    // 5. Save and send PDF
     const resultPdfBytes = await pdfDoc.save();
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=watermarked_${Date.now()}.pdf`);
     res.send(Buffer.from(resultPdfBytes));
+
+    // 6. Cleanup
     await fs.unlink(uploadedPath).catch(() => {});
   } catch (error) {
     console.error('PDF Watermark Error:', error);
     if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});
-    res.status(500).json({ error: 'Failed to process PDF: ' + error.message });
+    res.status(500).json({ error: 'Failed to add watermark: ' + error.message });
   }
 });
-
-
 // ------------------ ROTATE PDF ENDPOINT (ROBUST) ------------------
 router.post('/rotate-pdf', upload.single('pdfFile'), async (req, res) => {
   let uploadedPath = null;
