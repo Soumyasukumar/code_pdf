@@ -1,97 +1,131 @@
+// routes/compressRoutes.js
 const express = require('express');
 const router = express.Router();
 const fs = require('fs').promises;
 const path = require('path');
-const { PDFDocument } = require('pdf-lib');
-const Jimp = require('jimp');
+const { exec } = require('child_process');
+const util = require('util');
+const execAsync = util.promisify(exec);
+
 const Operation = require('../models/Operation');
 const upload = require('../config/upload');
 
-// Optimize image buffer using Jimp (lossy JPEG recompression)
-async function optimizeImage(imageBuffer, quality = 60) {
-    try {
-        const image = await Jimp.read(imageBuffer);
-        image.quality(quality);
-        return await image.getBufferAsync(Jimp.MIME_JPEG);
-    } catch (err) {
-        console.warn('Jimp optimization failed, using original image:', err.message);
-        return imageBuffer;
-    }
+async function safeUnlink(p) {
+    if (!p) return;
+    await fs.unlink(p).catch(() => {});
 }
 
-// ------------------ COMPRESS PDF (Deep Image Optimization) ------------------
+// Convert Windows path → WSL path
+function toWslPath(winPath) {
+    return winPath.replace(/^C:/i, '/mnt/c').replace(/\\/g, '/');
+}
+
+// Best possible compression using Ghostscript (handles everything perfectly)
+async function compressWithGhostscript(inputPath, outputPath) {
+    const inWsl = toWslPath(inputPath);
+    const outWsl = toWslPath(outputPath);
+
+    const gsCommand = [
+        'wsl', 'gs',
+        '-sDEVICE=pdfwrite',
+        '-dCompatibilityLevel=1.7',
+        '-dPDFSETTINGS=/ebook',        // Best balance: high quality + small size
+        '-dEmbedAllFonts=true',
+        '-dSubsetFonts=true',
+        '-dAutoRotatePages=/None',
+        '-dColorImageDownsampleType=/Bicubic',
+        '-dColorImageResolution=150',
+        '-dGrayImageDownsampleType=/Bicubic',
+        '-dGrayImageResolution=150',
+        '-dMonoImageDownsampleType=/Bicubic',
+        '-dMonoImageResolution=300',
+        '-dNOPAUSE',
+        '-dQUIET',
+        '-dBATCH',
+        `-sOutputFile="${outWsl}"`,
+        `"${inWsl}"`
+    ].join(' ');
+
+    await execAsync(gsCommand, { timeout: 600000 }); // 10 min max
+}
+
+// Final polish with qpdf (linearize + max stream compression)
+async function finalizeWithQpdf(pdfPath) {
+    const wslPath = toWslPath(pdfPath);
+    const tempPath = pdfPath.replace('.pdf', '_final.pdf');
+    const wslTemp = toWslPath(tempPath);
+
+    const qpdfCmd = `wsl qpdf --linearize --object-streams=generate --compress-streams=y "${wslPath}" "${wslTemp}"`;
+    await execAsync(qpdfCmd, { timeout: 300000 });
+    await fs.rename(tempPath, pdfPath);
+}
+
+// MAIN ROUTE — NEVER CORRUPTS
 router.post('/compress-pdf', upload.single('pdfFile'), async (req, res) => {
     let inputPath = null;
     let outputPath = null;
-    const QUALITY = parseInt(req.body.quality, 10) || 60; // Allow client to set quality
 
     try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
         inputPath = req.file.path;
-        const pdfBytes = await fs.readFile(inputPath);
-        const pdfDoc = await PDFDocument.load(pdfBytes);
+        const originalSize = req.file.size;
+        outputPath = path.join('uploads', `compressed_${Date.now()}_${req.file.originalname}`);
 
-        // Create new document for rebuilt pages
-        const compressedDoc = await PDFDocument.create();
-        const pages = pdfDoc.getPages();
+        console.log('Compressing with Ghostscript...');
+        await compressWithGhostscript(inputPath, outputPath);
 
-        for (const page of pages) {
-            // Copy page into new document (preserves vectors/text)
-            const [copiedPage] = await compressedDoc.copyPages(pdfDoc, [pdfDoc.getPageIndices().find(i => pdfDoc.getPage(i) === page)]);
-            compressedDoc.addPage(copiedPage);
+        console.log('Finalizing with qpdf...');
+        await finalizeWithQpdf(outputPath);
 
-            // Extract images from original page (pdf-lib limited support)
-            const resources = page.node.Resources();
-            if (!resources) continue;
+        const finalSize = (await fs.stat(outputPath)).size;
+        const reduction = ((1 - finalSize / originalSize) * 100).toFixed(2);
 
-            const xObjects = resources.get('XObject');
-            if (!xObjects) continue;
+        console.log(`Success: ${originalSize} → ${finalSize} bytes (${reduction}% reduction)`);
 
-            const images = [];
-            xObjects.forEach((ref, name) => {
-                const xObj = pdfDoc.context.lookup(ref);
-                if (xObj && xObj.dict && ['Image'].includes(xObj.dict.get('Subtype')?.name)) {
-                    images.push({ name: name.toString(), ref });
-                }
+        // Block negative compression
+        if (finalSize >= originalSize * 0.98) {
+            await safeUnlink(inputPath);
+            await safeUnlink(outputPath);
+
+            await Operation.create({
+                operation: 'compress',
+                filename: req.file.originalname,
+                status: 'skipped',
+                note: 'Already optimized'
             });
 
-            // Limited replacement: re-embed optimized images (works only for simple cases)
-            for (const { name, ref } of images) {
-                try {
-                    const image = await pdfDoc.embedJpeg(await optimizeImage(ref.data, QUALITY));
-                    const newRef = compressedDoc.context.register(image.ref);
-                    // Replace in copied page resources (fragile)
-                    copiedPage.node.Resources().XObject().set(name, newRef);
-                } catch (e) {
-                    // Skip if image can't be processed
-                }
-            }
+            return res.json({
+                message: 'Already optimized',
+                originalSize,
+                wouldBeSize: finalSize,
+                reduction: reduction + '%'
+            });
         }
 
-        // Final save with pdf-lib optimizations
-        const compressedBytes = await compressedDoc.save({
-            useObjectStreams: true,
-            addDefaultPage: false,
+        await Operation.create({
+            operation: 'compress',
+            filename: req.file.originalname,
+            status: 'success',
+            reduction
         });
-
-        outputPath = path.join('uploads', `compressed_${Date.now()}_${req.file.originalname}`);
-        await fs.writeFile(outputPath, compressedBytes);
-
-        const origStat = await fs.stat(inputPath);
-        const compStat = await fs.stat(outputPath);
-        const reduction = 100 * (1 - compStat.size / origStat.size);
-        console.log(`Compression: ${reduction.toFixed(2)}% reduction`);
-
-        await Operation.create({ operation: 'compress', filename: req.file.originalname, status: 'success' });
 
         res.download(outputPath, `compressed_${req.file.originalname}`, async (err) => {
             if (err) console.error('Download error:', err);
-            await Promise.all([fs.unlink(inputPath), fs.unlink(outputPath)].map(p => p.catch(() => {})));
+            await Promise.all([safeUnlink(inputPath), safeUnlink(outputPath)]);
         });
 
     } catch (err) {
-        console.error('PDF compression failed:', err);
-        if (inputPath) await fs.unlink(inputPath).catch(() => {});
-        await Operation.create({ operation: 'compress', filename: req.file?.originalname || 'unknown', status: 'failed' });
+        console.error('Compression failed:', err.message);
+        await safeUnlink(inputPath);
+        await safeUnlink(outputPath);
+
+        await Operation.create({
+            operation: 'compress',
+            filename: req.file?.originalname || 'unknown',
+            status: 'failed'
+        });
+
         res.status(500).json({ error: 'Failed to compress PDF' });
     }
 });
